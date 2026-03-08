@@ -1,8 +1,20 @@
+export interface Range {
+  id: number;
+  network_id: number;
+  label: string;
+  start_ip: string;
+  end_ip: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Network {
   id: number;
   name: string;
   cidr: string;
   description: string | null;
+  ranges: Range[];
   created_at: string;
   updated_at: string;
 }

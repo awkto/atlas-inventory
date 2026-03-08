@@ -75,6 +75,13 @@ export default function App() {
           </NavLink>
         ))}
         <div className="ml-auto flex items-center gap-4">
+          <button
+            onClick={toggleDarkLight}
+            className="text-[var(--text-nav)] hover:text-[var(--text-nav-active)] transition text-sm border border-[var(--text-nav)]/30 rounded px-2 py-0.5"
+            title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+          >
+            {theme === "light" ? "Light" : "Dark"}
+          </button>
           <a
             href="/api/export/csv"
             className="text-sm text-[var(--text-nav)] hover:text-[var(--text-nav-active)] transition"
@@ -89,13 +96,6 @@ export default function App() {
           >
             Settings
           </NavLink>
-          <button
-            onClick={toggleDarkLight}
-            className="text-[var(--text-nav)] hover:text-[var(--text-nav-active)] transition text-sm"
-            title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
-          >
-            {theme === "light" ? "☾" : "☀"}
-          </button>
         </div>
       </nav>
       <main className="max-w-7xl mx-auto px-6 py-6">

@@ -3,8 +3,10 @@
 @tailwind utilities;
 
 body {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
 
 [data-theme="light"] {

@@ -16,6 +16,22 @@ class Network(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     devices: Mapped[list["Device"]] = relationship(back_populates="network")
+    ranges: Mapped[list["Range"]] = relationship(back_populates="network", cascade="all, delete-orphan")
+
+
+class Range(Base):
+    __tablename__ = "ranges"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    network_id: Mapped[int] = mapped_column(ForeignKey("networks.id", ondelete="CASCADE"))
+    label: Mapped[str] = mapped_column(String(255))
+    start_ip: Mapped[str] = mapped_column(String(64))
+    end_ip: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    network: Mapped["Network"] = relationship(back_populates="ranges")
 
 
 class Device(Base):

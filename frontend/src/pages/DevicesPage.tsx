@@ -48,8 +48,11 @@ export default function DevicesPage() {
       </div>
 
       {showForm && (
-        <div className="mb-6 bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6">
-          <DeviceForm onSubmit={handleCreate} onCancel={() => setShowForm(false)} submitLabel="Create" />
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center" onClick={(e) => { if (e.target === e.currentTarget) setShowForm(false); }}>
+          <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-xl">
+            <h2 className="text-lg font-bold text-[var(--text-heading)] mb-4">Add Device</h2>
+            <DeviceForm onSubmit={handleCreate} onCancel={() => setShowForm(false)} submitLabel="Create" />
+          </div>
         </div>
       )}
 

@@ -1,4 +1,4 @@
-import type { Device, DeviceTree, Network } from "./types";
+import type { Device, DeviceTree, Network, Range } from "./types";
 
 function getToken(): string | null {
   return localStorage.getItem("atlas_token");
@@ -58,6 +58,14 @@ export const updateNetwork = (id: number, data: Partial<Network>) =>
   request<Network>(`/api/networks/${id}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteNetwork = (id: number) =>
   request<void>(`/api/networks/${id}`, { method: "DELETE" });
+
+// Ranges
+export const createRange = (networkId: number, data: Partial<Range>) =>
+  request<Range>(`/api/networks/${networkId}/ranges`, { method: "POST", body: JSON.stringify(data) });
+export const updateRange = (networkId: number, rangeId: number, data: Partial<Range>) =>
+  request<Range>(`/api/networks/${networkId}/ranges/${rangeId}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteRange = (networkId: number, rangeId: number) =>
+  request<void>(`/api/networks/${networkId}/ranges/${rangeId}`, { method: "DELETE" });
 
 // Health
 export const checkHealth = () => request<{ status: string }>("/api/health");

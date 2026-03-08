@@ -20,10 +20,40 @@ class NetworkUpdate(BaseModel):
     description: str | None = None
 
 
+# --- Range ---
+
+class RangeBase(BaseModel):
+    label: str
+    start_ip: str
+    end_ip: str
+    description: str | None = None
+
+
+class RangeCreate(RangeBase):
+    pass
+
+
+class RangeUpdate(BaseModel):
+    label: str | None = None
+    start_ip: str | None = None
+    end_ip: str | None = None
+    description: str | None = None
+
+
+class RangeOut(RangeBase):
+    id: int
+    network_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class NetworkOut(NetworkBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    ranges: list[RangeOut] = []
 
     model_config = {"from_attributes": True}
 
