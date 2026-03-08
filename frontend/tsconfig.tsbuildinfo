@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/DeviceForm.tsx","./src/pages/DeviceDetailPage.tsx","./src/pages/DevicesPage.tsx","./src/pages/NetworkMapPage.tsx","./src/pages/NetworksPage.tsx","./src/pages/TreePage.tsx"],"version":"5.7.3"}

@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+[data-theme="light"] {
+  --bg-page: #f9fafb;
+  --bg-nav: #1e293b;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f9fafb;
+  --bg-thead: #334155;
+  --bg-input: #ffffff;
+  --bg-tag: #f3f4f6;
+  --border-card: #e5e7eb;
+  --border-input: #d1d5db;
+  --border-subtle: #f3f4f6;
+  --border-thead: #475569;
+  --text-heading: #111827;
+  --text-primary: #374151;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --text-nav: #94a3b8;
+  --text-nav-active: #f1f5f9;
+  --text-thead: #e2e8f0;
+  --text-tag: #4b5563;
+  --accent: #059669;
+  --accent-hover: #047857;
+  --accent-text: #047857;
+  --accent-brand: #34d399;
+  --btn-text: #ffffff;
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.05);
+  --danger-border: rgba(239, 68, 68, 0.2);
+  --status-active: #16a34a;
+  --status-inactive: #9ca3af;
+  --status-unknown: #ca8a04;
+  --status-active-bg: rgba(22, 163, 74, 0.1);
+  --status-inactive-bg: rgba(156, 163, 175, 0.1);
+  --status-unknown-bg: rgba(202, 138, 4, 0.1);
+  --focus-ring: #059669;
+}
+
+[data-theme="dark"] {
+  --bg-page: #030712;
+  --bg-nav: #111827;
+  --bg-card: #111827;
+  --bg-card-hover: rgba(31, 41, 55, 0.5);
+  --bg-thead: #1f2937;
+  --bg-input: #1f2937;
+  --bg-tag: #1f2937;
+  --border-card: #1f2937;
+  --border-input: #374151;
+  --border-subtle: rgba(31, 41, 55, 0.5);
+  --border-thead: #374151;
+  --text-heading: #f3f4f6;
+  --text-primary: #d1d5db;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+  --text-nav: #9ca3af;
+  --text-nav-active: #ffffff;
+  --text-thead: #d1d5db;
+  --text-tag: #d1d5db;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-text: #60a5fa;
+  --accent-brand: #60a5fa;
+  --btn-text: #ffffff;
+  --danger: #f87171;
+  --danger-bg: rgba(248, 113, 113, 0.05);
+  --danger-border: rgba(248, 113, 113, 0.2);
+  --status-active: #4ade80;
+  --status-inactive: #6b7280;
+  --status-unknown: #fbbf24;
+  --status-active-bg: rgba(74, 222, 128, 0.1);
+  --status-inactive-bg: rgba(107, 114, 128, 0.1);
+  --status-unknown-bg: rgba(251, 191, 36, 0.1);
+  --focus-ring: #2563eb;
+}
+
+[data-theme="solarized"] {
+  --bg-page: #00212b;
+  --bg-nav: #073642;
+  --bg-card: #073642;
+  --bg-card-hover: rgba(0, 33, 43, 0.5);
+  --bg-thead: rgba(88, 110, 117, 0.2);
+  --bg-input: #00212b;
+  --bg-tag: #00212b;
+  --border-card: rgba(88, 110, 117, 0.2);
+  --border-input: rgba(88, 110, 117, 0.4);
+  --border-subtle: rgba(88, 110, 117, 0.1);
+  --border-thead: rgba(88, 110, 117, 0.3);
+  --text-heading: #eee8d5;
+  --text-primary: #b0c4c8;
+  --text-secondary: #a3b8bc;
+  --text-muted: #6d8890;
+  --text-nav: #7e949c;
+  --text-nav-active: #eee8d5;
+  --text-thead: #a3b8bc;
+  --text-tag: #a3b8bc;
+  --accent: #2aa198;
+  --accent-hover: #1a7870;
+  --accent-text: #2aa198;
+  --accent-brand: #2aa198;
+  --btn-text: #00212b;
+  --danger: #dc322f;
+  --danger-bg: rgba(220, 50, 47, 0.1);
+  --danger-border: rgba(220, 50, 47, 0.3);
+  --status-active: #859900;
+  --status-inactive: #6d8890;
+  --status-unknown: #b58900;
+  --status-active-bg: rgba(133, 153, 0, 0.2);
+  --status-inactive-bg: rgba(88, 110, 117, 0.2);
+  --status-unknown-bg: rgba(181, 137, 0, 0.2);
+  --focus-ring: #2aa198;
+}

@@ -1,0 +1,20 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      - DATABASE_URL=sqlite:////data/atlas.db
+      - ATLAS_AUTH_TOKEN=${ATLAS_AUTH_TOKEN:-}
+    volumes:
+      - atlas-data:/data
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3080:80"
+    depends_on:
+      - backend
+
+volumes:
+  atlas-data:
