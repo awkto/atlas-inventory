@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_token
 from app.database import get_db
-from app.models import Device
+from app.models import Device, Endpoint
 
 router = APIRouter(prefix="/api/export", tags=["export"], dependencies=[Depends(verify_token)])
 
@@ -37,4 +37,31 @@ def export_csv(db: Session = Depends(get_db)):
         output,
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=atlas-inventory.csv"},
+    )
+
+
+@router.get("/endpoints-csv")
+def export_endpoints_csv(db: Session = Depends(get_db)):
+    endpoints = db.query(Endpoint).order_by(Endpoint.label).all()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "id", "label", "url", "protocol", "device_id",
+        "tags", "openbao_paths", "notes",
+        "created_at", "updated_at",
+    ])
+    for e in endpoints:
+        writer.writerow([
+            e.id, e.label, e.url, e.protocol or "",
+            e.device_id or "",
+            e.tags or "[]", e.openbao_paths or "[]",
+            e.notes or "",
+            e.created_at.isoformat() if e.created_at else "",
+            e.updated_at.isoformat() if e.updated_at else "",
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=atlas-endpoints.csv"},
     )

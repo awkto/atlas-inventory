@@ -1,4 +1,4 @@
-import type { Device, DeviceTree, Network, Range } from "./types";
+import type { Device, DeviceTree, Network, Range, Endpoint, SearchResults } from "./types";
 
 function getToken(): string | null {
   return localStorage.getItem("atlas_token");
@@ -66,6 +66,23 @@ export const updateRange = (networkId: number, rangeId: number, data: Partial<Ra
   request<Range>(`/api/networks/${networkId}/ranges/${rangeId}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteRange = (networkId: number, rangeId: number) =>
   request<void>(`/api/networks/${networkId}/ranges/${rangeId}`, { method: "DELETE" });
+
+// Endpoints
+export const listEndpoints = (params?: Record<string, string>) => {
+  const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+  return request<Endpoint[]>(`/api/endpoints${qs}`);
+};
+export const getEndpoint = (id: number) => request<Endpoint>(`/api/endpoints/${id}`);
+export const createEndpoint = (data: Partial<Endpoint>) =>
+  request<Endpoint>("/api/endpoints", { method: "POST", body: JSON.stringify(data) });
+export const updateEndpoint = (id: number, data: Partial<Endpoint>) =>
+  request<Endpoint>(`/api/endpoints/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteEndpoint = (id: number) =>
+  request<void>(`/api/endpoints/${id}`, { method: "DELETE" });
+
+// Search
+export const searchByTag = (tag: string) =>
+  request<SearchResults>(`/api/search?tag=${encodeURIComponent(tag)}`);
 
 // Health
 export const checkHealth = () => request<{ status: string }>("/api/health");

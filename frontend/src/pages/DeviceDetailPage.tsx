@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import type { Device } from "../types";
-import { getDevice, updateDevice, deleteDevice, listDevices } from "../api";
+import type { Device, Endpoint } from "../types";
+import { getDevice, updateDevice, deleteDevice, listDevices, listEndpoints } from "../api";
 import DeviceForm from "../components/DeviceForm";
 
 export default function DeviceDetailPage() {
@@ -10,11 +10,13 @@ export default function DeviceDetailPage() {
   const [device, setDevice] = useState<Device | null>(null);
   const [editing, setEditing] = useState(false);
   const [children, setChildren] = useState<Device[]>([]);
+  const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
 
   useEffect(() => {
     if (!id) return;
     getDevice(Number(id)).then(setDevice);
     listDevices({ parent_id: id }).then(setChildren);
+    listEndpoints({ device_id: id }).then(setEndpoints);
   }, [id]);
 
   if (!device) return <p className="text-[var(--text-muted)]">Loading...</p>;
@@ -112,6 +114,18 @@ export default function DeviceDetailPage() {
               {children.map((c) => (
                 <Link key={c.id} to={`/devices/${c.id}`} className="block text-[var(--accent-text)] hover:underline text-sm">
                   {c.name} <span className="text-[var(--text-muted)] text-xs">({c.type})</span>
+                </Link>
+              ))}
+            </div>
+          )}
+          <h2 className="text-sm font-bold text-[var(--text-secondary)] mt-4 pt-4 border-t border-[var(--border-card)] mb-3">Endpoints</h2>
+          {endpoints.length === 0 ? (
+            <p className="text-[var(--text-muted)] text-sm">No endpoints</p>
+          ) : (
+            <div className="space-y-2">
+              {endpoints.map((ep) => (
+                <Link key={ep.id} to={`/endpoints/${ep.id}`} className="block text-[var(--accent-text)] hover:underline text-sm">
+                  {ep.label} <span className="text-[var(--text-muted)] text-xs">({ep.protocol || ep.url})</span>
                 </Link>
               ))}
             </div>

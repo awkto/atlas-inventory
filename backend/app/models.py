@@ -57,3 +57,21 @@ class Device(Base):
     parent: Mapped["Device | None"] = relationship("Device", remote_side=[id], back_populates="children")
     children: Mapped[list["Device"]] = relationship("Device", back_populates="parent")
     network: Mapped["Network | None"] = relationship(back_populates="devices")
+    endpoints: Mapped[list["Endpoint"]] = relationship(back_populates="device")
+
+
+class Endpoint(Base):
+    __tablename__ = "endpoints"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(String(255))
+    url: Mapped[str] = mapped_column(String(1024))
+    protocol: Mapped[str | None] = mapped_column(String(64), default=None)  # http, https, ssh, tcp, etc.
+    device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"), default=None)
+    tags: Mapped[str | None] = mapped_column(Text, default=None)  # JSON array
+    openbao_paths: Mapped[str | None] = mapped_column(Text, default=None)  # JSON array
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    device: Mapped["Device | None"] = relationship(back_populates="endpoints")

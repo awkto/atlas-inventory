@@ -74,3 +74,33 @@ export const PLATFORMS = [
 ];
 
 export const STATUSES = ["active", "inactive", "unknown"] as const;
+
+export interface Endpoint {
+  id: number;
+  label: string;
+  url: string;
+  protocol: string | null;
+  device_id: number | null;
+  tags: string[];
+  openbao_paths: string[];
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export const PROTOCOLS = [
+  "http",
+  "https",
+  "ssh",
+  "tcp",
+  "udp",
+  "grpc",
+  "ws",
+  "wss",
+  "other",
+];
+
+export interface SearchResults {
+  devices: Device[];
+  endpoints: Endpoint[];
+}

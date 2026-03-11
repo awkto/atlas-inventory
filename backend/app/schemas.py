@@ -103,3 +103,37 @@ class DeviceOut(DeviceBase):
 
 class DeviceTree(DeviceOut):
     children: list["DeviceTree"] = []
+
+
+# --- Endpoint ---
+
+class EndpointBase(BaseModel):
+    label: str
+    url: str
+    protocol: str | None = None
+    device_id: int | None = None
+    tags: list[str] = []
+    openbao_paths: list[str] = []
+    notes: str | None = None
+
+
+class EndpointCreate(EndpointBase):
+    pass
+
+
+class EndpointUpdate(BaseModel):
+    label: str | None = None
+    url: str | None = None
+    protocol: str | None = None
+    device_id: int | None = None
+    tags: list[str] | None = None
+    openbao_paths: list[str] | None = None
+    notes: str | None = None
+
+
+class EndpointOut(EndpointBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
