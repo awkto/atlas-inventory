@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/search", tags=["search"], dependencies=[Depends(
 
 def _item_to_out(item: Item) -> ItemOut:
     data = {c.name: getattr(item, c.name) for c in item.__table__.columns}
-    for field in ("ips", "openbao_paths", "tags"):
+    for field in ("ips", "openbao_paths", "tags", "ports"):
         val = data.get(field)
         data[field] = json.loads(val) if val else []
     data["network"] = item.network
