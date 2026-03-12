@@ -88,6 +88,28 @@ export interface Endpoint {
   updated_at: string;
 }
 
+export interface Repository {
+  id: number;
+  name: string;
+  url: string;
+  description: string | null;
+  platform: string | null;
+  tags: string[];
+  openbao_paths: string[];
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export const REPO_PLATFORMS = [
+  "github",
+  "gitlab",
+  "gitea",
+  "bitbucket",
+  "sourcehut",
+  "other",
+];
+
 export const PROTOCOLS = [
   "http",
   "https",
@@ -103,4 +125,5 @@ export const PROTOCOLS = [
 export interface SearchResults {
   devices: Device[];
   endpoints: Endpoint[];
+  repositories: Repository[];
 }

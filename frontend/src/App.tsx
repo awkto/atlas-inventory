@@ -9,6 +9,8 @@ import NetworksPage from "./pages/NetworksPage";
 import NetworkMapPage from "./pages/NetworkMapPage";
 import EndpointsPage from "./pages/EndpointsPage";
 import EndpointDetailPage from "./pages/EndpointDetailPage";
+import RepositoriesPage from "./pages/RepositoriesPage";
+import RepositoryDetailPage from "./pages/RepositoryDetailPage";
 import SettingsPage from "./pages/SettingsPage";
 
 function Login() {
@@ -45,6 +47,7 @@ function Login() {
 const navItems = [
   { to: "/", label: "Devices" },
   { to: "/endpoints", label: "Endpoints" },
+  { to: "/repositories", label: "Repositories" },
   { to: "/tree", label: "Hierarchy" },
   { to: "/networks", label: "Networks" },
   { to: "/network-map", label: "Network Map" },
@@ -107,6 +110,8 @@ export default function App() {
           <Route path="/devices/:id" element={<DeviceDetailPage />} />
           <Route path="/endpoints" element={<EndpointsPage />} />
           <Route path="/endpoints/:id" element={<EndpointDetailPage />} />
+          <Route path="/repositories" element={<RepositoriesPage />} />
+          <Route path="/repositories/:id" element={<RepositoryDetailPage />} />
           <Route path="/tree" element={<TreePage />} />
           <Route path="/networks" element={<NetworksPage />} />
           <Route path="/network-map" element={<NetworkMapPage />} />

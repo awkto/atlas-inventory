@@ -105,6 +105,40 @@ class DeviceTree(DeviceOut):
     children: list["DeviceTree"] = []
 
 
+# --- Repository ---
+
+class RepositoryBase(BaseModel):
+    name: str
+    url: str
+    description: str | None = None
+    platform: str | None = None
+    tags: list[str] = []
+    openbao_paths: list[str] = []
+    notes: str | None = None
+
+
+class RepositoryCreate(RepositoryBase):
+    pass
+
+
+class RepositoryUpdate(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    description: str | None = None
+    platform: str | None = None
+    tags: list[str] | None = None
+    openbao_paths: list[str] | None = None
+    notes: str | None = None
+
+
+class RepositoryOut(RepositoryBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- Endpoint ---
 
 class EndpointBase(BaseModel):

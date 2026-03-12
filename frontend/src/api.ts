@@ -1,4 +1,4 @@
-import type { Device, DeviceTree, Network, Range, Endpoint, SearchResults } from "./types";
+import type { Device, DeviceTree, Network, Range, Endpoint, Repository, SearchResults } from "./types";
 
 function getToken(): string | null {
   return localStorage.getItem("atlas_token");
@@ -79,6 +79,19 @@ export const updateEndpoint = (id: number, data: Partial<Endpoint>) =>
   request<Endpoint>(`/api/endpoints/${id}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteEndpoint = (id: number) =>
   request<void>(`/api/endpoints/${id}`, { method: "DELETE" });
+
+// Repositories
+export const listRepositories = (params?: Record<string, string>) => {
+  const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+  return request<Repository[]>(`/api/repositories${qs}`);
+};
+export const getRepository = (id: number) => request<Repository>(`/api/repositories/${id}`);
+export const createRepository = (data: Partial<Repository>) =>
+  request<Repository>("/api/repositories", { method: "POST", body: JSON.stringify(data) });
+export const updateRepository = (id: number, data: Partial<Repository>) =>
+  request<Repository>(`/api/repositories/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteRepository = (id: number) =>
+  request<void>(`/api/repositories/${id}`, { method: "DELETE" });
 
 // Search
 export const searchByTag = (tag: string) =>

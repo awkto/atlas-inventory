@@ -60,6 +60,21 @@ class Device(Base):
     endpoints: Mapped[list["Endpoint"]] = relationship(back_populates="device")
 
 
+class Repository(Base):
+    __tablename__ = "repositories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    url: Mapped[str] = mapped_column(String(1024))
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    platform: Mapped[str | None] = mapped_column(String(64), default=None)  # github, gitlab, gitea, etc.
+    tags: Mapped[str | None] = mapped_column(Text, default=None)  # JSON array
+    openbao_paths: Mapped[str | None] = mapped_column(Text, default=None)  # JSON array
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class Endpoint(Base):
     __tablename__ = "endpoints"
 

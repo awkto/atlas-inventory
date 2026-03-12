@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_token
 from app.database import get_db
-from app.models import Device, Endpoint
-from app.schemas import DeviceOut, EndpointOut
+from app.models import Device, Endpoint, Repository
+from app.schemas import DeviceOut, EndpointOut, RepositoryOut
 
 router = APIRouter(prefix="/api/search", tags=["search"], dependencies=[Depends(verify_token)])
 
@@ -27,6 +27,15 @@ def _serialize_endpoint(endpoint: Endpoint) -> EndpointOut:
     return EndpointOut.model_validate(data)
 
 
+def _serialize_repository(repo: Repository) -> RepositoryOut:
+    import json
+    data = {c.name: getattr(repo, c.name) for c in repo.__table__.columns}
+    for field in ("tags", "openbao_paths"):
+        val = data.get(field)
+        data[field] = json.loads(val) if val else []
+    return RepositoryOut.model_validate(data)
+
+
 @router.get("")
 def search_by_tag(
     tag: str = Query(...),
@@ -35,7 +44,9 @@ def search_by_tag(
     pattern = f"%{tag}%"
     devices = db.query(Device).filter(Device.tags.ilike(pattern)).order_by(Device.name).all()
     endpoints = db.query(Endpoint).filter(Endpoint.tags.ilike(pattern)).order_by(Endpoint.label).all()
+    repos = db.query(Repository).filter(Repository.tags.ilike(pattern)).order_by(Repository.name).all()
     return {
         "devices": [_serialize_device(d) for d in devices],
         "endpoints": [_serialize_endpoint(e) for e in endpoints],
+        "repositories": [_serialize_repository(r) for r in repos],
     }

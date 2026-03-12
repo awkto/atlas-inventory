@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
-from app.routers import devices, endpoints, export, networks, search
+from app.routers import devices, endpoints, export, networks, repositories, search
 
 Base.metadata.create_all(bind=engine)
 
@@ -22,6 +22,7 @@ app.add_middleware(
 
 app.include_router(devices.router)
 app.include_router(endpoints.router)
+app.include_router(repositories.router)
 app.include_router(networks.router)
 app.include_router(export.router)
 app.include_router(search.router)
