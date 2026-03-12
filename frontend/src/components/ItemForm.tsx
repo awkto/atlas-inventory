@@ -49,6 +49,7 @@ export default function ItemForm({ initial, initialType, onSubmit, onCancel, sub
   const isEndpoint = type === "endpoint";
   const isRepository = type === "repository";
   const isDocument = type === "document";
+  const isSecret = type === "secret";
 
   const parseList = (raw: string) =>
     raw.split(",").map((s) => s.trim()).filter(Boolean);
@@ -89,6 +90,10 @@ export default function ItemForm({ initial, initialType, onSubmit, onCancel, sub
         data.description = description || null;
       }
       if (isDocument) {
+        data.url = url || null;
+        data.description = description || null;
+      }
+      if (isSecret) {
         data.url = url || null;
         data.description = description || null;
       }
@@ -195,6 +200,20 @@ export default function ItemForm({ initial, initialType, onSubmit, onCancel, sub
               <option value="">— select —</option>
               {["github", "gitlab", "gitea", "bitbucket", "other"].map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
+          </div>
+          <div>
+            <label className={labelCls}>Description</label>
+            <input value={description} onChange={(e) => setDescription(e.target.value)} className={inputCls} />
+          </div>
+        </>
+      )}
+
+      {/* Secret fields */}
+      {isSecret && (
+        <>
+          <div>
+            <label className={labelCls}>URL</label>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} className={inputCls} placeholder="https://toke.dnsif.ca/ui/vault/secrets/kv/show/..." />
           </div>
           <div>
             <label className={labelCls}>Description</label>
