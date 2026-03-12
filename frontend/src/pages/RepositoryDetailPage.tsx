@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import type { Repository } from "../types";
 import { getRepository, updateRepository, deleteRepository } from "../api";
 import RepositoryForm from "../components/RepositoryForm";
+import TagBadge from "../components/TagBadge";
 
 export default function RepositoryDetailPage() {
   const { id } = useParams();
@@ -70,9 +71,7 @@ export default function RepositoryDetailPage() {
             {field("URL", <a href={repo.url} target="_blank" rel="noopener noreferrer" className="text-[var(--accent-text)] hover:underline font-mono text-sm">{repo.url}</a>)}
             {field("Platform", repo.platform)}
             {field("Description", repo.description)}
-            {field("Tags", repo.tags.length > 0 && repo.tags.map((t) => (
-              <span key={t} className="inline-block bg-[var(--bg-tag)] text-[var(--text-tag)] rounded px-1.5 py-0.5 text-xs mr-1 border border-[var(--border-card)]">{t}</span>
-            )))}
+            {field("Tags", repo.tags.length > 0 && repo.tags.map((t) => <TagBadge key={t} tag={t} />))}
           </div>
           {repo.openbao_paths.length > 0 && (
             <div className="mt-4">

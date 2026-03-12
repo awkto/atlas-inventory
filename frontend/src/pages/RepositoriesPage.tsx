@@ -4,6 +4,7 @@ import type { Repository } from "../types";
 import { REPO_PLATFORMS } from "../types";
 import { listRepositories, createRepository, deleteRepository } from "../api";
 import RepositoryForm from "../components/RepositoryForm";
+import TagBadge from "../components/TagBadge";
 
 export default function RepositoriesPage() {
   const [repos, setRepos] = useState<Repository[]>([]);
@@ -90,11 +91,7 @@ export default function RepositoriesPage() {
                 <td className="px-4 py-2 text-[var(--text-secondary)] font-mono text-xs">{r.url}</td>
                 <td className="px-4 py-2 text-[var(--text-secondary)]">{r.platform || "—"}</td>
                 <td className="px-4 py-2">
-                  {r.tags.map((t) => (
-                    <span key={t} className="inline-block bg-[var(--bg-tag)] text-[var(--text-tag)] rounded px-1.5 py-0.5 text-xs mr-1 border border-[var(--border-card)]">
-                      {t}
-                    </span>
-                  ))}
+                  {r.tags.map((t) => <TagBadge key={t} tag={t} />)}
                 </td>
                 <td className="px-4 py-2 text-right">
                   <button onClick={() => handleDelete(r.id)} className="text-[var(--danger)] hover:opacity-70 text-xs">

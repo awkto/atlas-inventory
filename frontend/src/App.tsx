@@ -11,6 +11,7 @@ import EndpointsPage from "./pages/EndpointsPage";
 import EndpointDetailPage from "./pages/EndpointDetailPage";
 import RepositoriesPage from "./pages/RepositoriesPage";
 import RepositoryDetailPage from "./pages/RepositoryDetailPage";
+import TagSearchPage from "./pages/TagSearchPage";
 import SettingsPage from "./pages/SettingsPage";
 
 function Login() {
@@ -112,6 +113,7 @@ export default function App() {
           <Route path="/endpoints/:id" element={<EndpointDetailPage />} />
           <Route path="/repositories" element={<RepositoriesPage />} />
           <Route path="/repositories/:id" element={<RepositoryDetailPage />} />
+          <Route path="/search" element={<TagSearchPage />} />
           <Route path="/tree" element={<TreePage />} />
           <Route path="/networks" element={<NetworksPage />} />
           <Route path="/network-map" element={<NetworkMapPage />} />

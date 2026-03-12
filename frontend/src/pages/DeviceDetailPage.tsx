@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import type { Device, Endpoint } from "../types";
 import { getDevice, updateDevice, deleteDevice, listDevices, listEndpoints } from "../api";
 import DeviceForm from "../components/DeviceForm";
+import TagBadge from "../components/TagBadge";
 
 export default function DeviceDetailPage() {
   const { id } = useParams();
@@ -85,9 +86,7 @@ export default function DeviceDetailPage() {
               <span className="font-mono text-sm">{device.ips.join(", ")}</span>
             ))}
             {field("Network", device.network && `${device.network.name} (${device.network.cidr})`)}
-            {field("Tags", device.tags.length > 0 && device.tags.map((t) => (
-              <span key={t} className="inline-block bg-[var(--bg-tag)] text-[var(--text-tag)] rounded px-1.5 py-0.5 text-xs mr-1 border border-[var(--border-card)]">{t}</span>
-            )))}
+            {field("Tags", device.tags.length > 0 && device.tags.map((t) => <TagBadge key={t} tag={t} />))}
           </div>
           {device.openbao_paths.length > 0 && (
             <div className="mt-4">

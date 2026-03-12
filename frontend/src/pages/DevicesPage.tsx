@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Device } from "../types";
 import { listDevices, createDevice, deleteDevice } from "../api";
 import DeviceForm from "../components/DeviceForm";
+import TagBadge from "../components/TagBadge";
 
 export default function DevicesPage() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -112,11 +113,7 @@ export default function DevicesPage() {
                 <td className="px-4 py-2 text-[var(--text-secondary)] font-mono text-xs">{d.ips.join(", ") || "—"}</td>
                 <td className={`px-4 py-2 text-[var(--status-${d.status})]`}>{d.status}</td>
                 <td className="px-4 py-2">
-                  {d.tags.map((t) => (
-                    <span key={t} className="inline-block bg-[var(--bg-tag)] text-[var(--text-tag)] rounded px-1.5 py-0.5 text-xs mr-1 border border-[var(--border-card)]">
-                      {t}
-                    </span>
-                  ))}
+                  {d.tags.map((t) => <TagBadge key={t} tag={t} />)}
                 </td>
                 <td className="px-4 py-2 text-right">
                   <button onClick={() => handleDelete(d.id)} className="text-[var(--danger)] hover:opacity-70 text-xs">
