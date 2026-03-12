@@ -12,6 +12,26 @@ from app.routers import export, items, networks, search
 Base.metadata.create_all(bind=engine)
 
 
+def run_column_migrations():
+    """Add new columns to existing tables. Idempotent."""
+    db = SessionLocal()
+    try:
+        for col_sql in [
+            "ALTER TABLE items ADD COLUMN vmid INTEGER",
+            "ALTER TABLE items ADD COLUMN ports TEXT",
+        ]:
+            try:
+                db.execute(text(col_sql))
+                db.commit()
+            except Exception:
+                db.rollback()
+    finally:
+        db.close()
+
+
+run_column_migrations()
+
+
 def run_migration():
     """Migrate devices/endpoints/repositories data into items table. Idempotent."""
     db = SessionLocal()
@@ -145,7 +165,7 @@ def run_migration():
 
 run_migration()
 
-app = FastAPI(title="Atlas", description="Infrastructure Inventory", version="0.1.0")
+app = FastAPI(title="Atlas", description="Infrastructure Inventory", version="0.1.0", docs_url="/apidocs", redoc_url=None)
 
 app.add_middleware(
     CORSMiddleware,

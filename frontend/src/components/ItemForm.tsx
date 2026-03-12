@@ -27,6 +27,8 @@ export default function ItemForm({ initial, initialType, onSubmit, onCancel, sub
   const [description, setDescription] = useState(initial?.description ?? "");
   const [parentId, setParentId] = useState<string>(initial?.parent_id?.toString() ?? "");
   const [networkId, setNetworkId] = useState<string>(initial?.network_id?.toString() ?? "");
+  const [vmid, setVmid] = useState<string>(initial?.vmid?.toString() ?? "");
+  const [portsRaw, setPortsRaw] = useState((initial?.ports ?? []).join(", "));
   const [tagsRaw, setTagsRaw] = useState((initial?.tags ?? []).join(", "));
   const [openbaoRaw, setOpenbaoRaw] = useState((initial?.openbao_paths ?? []).join(", "));
   const [notes, setNotes] = useState(initial?.notes ?? "");
@@ -41,6 +43,8 @@ export default function ItemForm({ initial, initialType, onSubmit, onCancel, sub
     listNetworks().then(setNetworks).catch(() => {});
   }, []);
 
+  const isVm = type === "vm";
+  const isContainer = type === "container";
   const isInfra = INFRA_TYPES.includes(type);
   const isEndpoint = type === "endpoint";
   const isRepository = type === "repository";
@@ -68,6 +72,12 @@ export default function ItemForm({ initial, initialType, onSubmit, onCancel, sub
         data.status = status || null;
         data.network_id = networkId ? parseInt(networkId) : null;
         data.ips = parseList(ipsRaw);
+      }
+      if (isVm) {
+        data.vmid = vmid ? parseInt(vmid) : null;
+      }
+      if (isContainer) {
+        data.ports = parseList(portsRaw);
       }
       if (isEndpoint) {
         data.url = url || null;
@@ -140,6 +150,18 @@ export default function ItemForm({ initial, initialType, onSubmit, onCancel, sub
               {networks.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
             </select>
           </div>
+          {isVm && (
+            <div>
+              <label className={labelCls}>VM ID (Proxmox)</label>
+              <input type="number" value={vmid} onChange={(e) => setVmid(e.target.value)} className={inputCls} placeholder="100" />
+            </div>
+          )}
+          {isContainer && (
+            <div>
+              <label className={labelCls}>Ports (comma-separated)</label>
+              <input value={portsRaw} onChange={(e) => setPortsRaw(e.target.value)} className={inputCls} placeholder="8080:80, 5432:5432" />
+            </div>
+          )}
         </>
       )}
 

@@ -33,6 +33,8 @@ export interface Item {
   parent_id: number | null;
   network_id: number | null;
   network: Network | null;
+  vmid: number | null;
+  ports: string[];
   tags: string[];
   openbao_paths: string[];
   notes: string | null;

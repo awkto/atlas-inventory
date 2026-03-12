@@ -49,6 +49,8 @@ class Item(Base):
     description: Mapped[str | None] = mapped_column(Text, default=None)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("items.id", ondelete="SET NULL"), default=None)
     network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), default=None)
+    vmid: Mapped[int | None] = mapped_column(default=None)  # Proxmox VM ID
+    ports: Mapped[str | None] = mapped_column(Text, default=None)  # JSON array of port strings
     tags: Mapped[str | None] = mapped_column(Text, default=None)  # JSON array
     openbao_paths: Mapped[str | None] = mapped_column(Text, default=None)  # JSON array
     notes: Mapped[str | None] = mapped_column(Text, default=None)

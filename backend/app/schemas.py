@@ -72,6 +72,8 @@ class ItemBase(BaseModel):
     description: str | None = None
     parent_id: int | None = None
     network_id: int | None = None
+    vmid: int | None = None
+    ports: list[str] = []
     tags: list[str] = []
     openbao_paths: list[str] = []
     notes: str | None = None
@@ -93,6 +95,8 @@ class ItemUpdate(BaseModel):
     description: str | None = None
     parent_id: int | None = None
     network_id: int | None = None
+    vmid: int | None = None
+    ports: list[str] | None = None
     tags: list[str] | None = None
     openbao_paths: list[str] | None = None
     notes: str | None = None

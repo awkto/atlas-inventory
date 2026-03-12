@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/items", tags=["items"], dependencies=[Depends(ve
 def _serialize_json_fields(item: Item) -> dict:
     """Convert JSON text fields to lists for the response."""
     data = {c.name: getattr(item, c.name) for c in item.__table__.columns}
-    for field in ("ips", "openbao_paths", "tags"):
+    for field in ("ips", "openbao_paths", "tags", "ports"):
         val = data.get(field)
         data[field] = json.loads(val) if val else []
     return data
@@ -27,7 +27,7 @@ def _item_to_out(item: Item) -> ItemOut:
 
 
 def _set_json_fields(data: dict) -> dict:
-    for field in ("ips", "openbao_paths", "tags"):
+    for field in ("ips", "openbao_paths", "tags", "ports"):
         if field in data and data[field] is not None:
             data[field] = json.dumps(data[field])
     return data
