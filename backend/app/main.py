@@ -4,11 +4,146 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
-from app.database import Base, engine
-from app.routers import devices, endpoints, export, networks, repositories, search
+from app.database import Base, engine, SessionLocal
+from app.routers import export, items, networks, search
 
 Base.metadata.create_all(bind=engine)
+
+
+def run_migration():
+    """Migrate devices/endpoints/repositories data into items table. Idempotent."""
+    db = SessionLocal()
+    try:
+        # Skip if items table already has data
+        item_count = db.execute(text("SELECT COUNT(*) FROM items")).scalar()
+        if item_count > 0:
+            return
+
+        # Check if devices table exists and has data
+        try:
+            device_count = db.execute(text("SELECT COUNT(*) FROM devices")).scalar()
+        except Exception:
+            return
+        if device_count == 0:
+            return
+
+        # --- Migrate devices → items (first pass: insert without parent_id) ---
+        devices = db.execute(text(
+            "SELECT id, name, fqdn, ips, type, platform, status, notes, openbao_paths, tags, "
+            "parent_id, network_id, created_at, updated_at FROM devices"
+        )).fetchall()
+
+        # Remap device types
+        type_map = {
+            "network-device": "device",
+            "cloud-resource": "vm",
+        }
+
+        old_to_new = {}  # old device id → new item id
+
+        for d in devices:
+            mapped_type = type_map.get(d.type, d.type)
+            result = db.execute(
+                text(
+                    "INSERT INTO items (type, name, fqdn, ips, platform, status, notes, "
+                    "openbao_paths, tags, network_id, created_at, updated_at) "
+                    "VALUES (:type, :name, :fqdn, :ips, :platform, :status, :notes, "
+                    ":openbao_paths, :tags, :network_id, :created_at, :updated_at)"
+                ),
+                {
+                    "type": mapped_type,
+                    "name": d.name,
+                    "fqdn": d.fqdn,
+                    "ips": d.ips,
+                    "platform": d.platform,
+                    "status": d.status,
+                    "notes": d.notes,
+                    "openbao_paths": d.openbao_paths,
+                    "tags": d.tags,
+                    "network_id": d.network_id,
+                    "created_at": d.created_at,
+                    "updated_at": d.updated_at,
+                },
+            )
+            old_to_new[d.id] = result.lastrowid
+
+        # Second pass: update parent_ids
+        for d in devices:
+            if d.parent_id is not None and d.parent_id in old_to_new:
+                new_id = old_to_new[d.id]
+                new_parent_id = old_to_new[d.parent_id]
+                db.execute(
+                    text("UPDATE items SET parent_id = :parent_id WHERE id = :id"),
+                    {"parent_id": new_parent_id, "id": new_id},
+                )
+
+        # --- Migrate endpoints → items ---
+        try:
+            endpoints = db.execute(text(
+                "SELECT id, label, url, protocol, device_id, tags, openbao_paths, notes, "
+                "created_at, updated_at FROM endpoints"
+            )).fetchall()
+            for ep in endpoints:
+                parent_id = old_to_new.get(ep.device_id) if ep.device_id else None
+                db.execute(
+                    text(
+                        "INSERT INTO items (type, name, url, protocol, parent_id, tags, "
+                        "openbao_paths, notes, created_at, updated_at) "
+                        "VALUES ('endpoint', :name, :url, :protocol, :parent_id, :tags, "
+                        ":openbao_paths, :notes, :created_at, :updated_at)"
+                    ),
+                    {
+                        "name": ep.label,
+                        "url": ep.url,
+                        "protocol": ep.protocol,
+                        "parent_id": parent_id,
+                        "tags": ep.tags,
+                        "openbao_paths": ep.openbao_paths,
+                        "notes": ep.notes,
+                        "created_at": ep.created_at,
+                        "updated_at": ep.updated_at,
+                    },
+                )
+        except Exception:
+            pass
+
+        # --- Migrate repositories → items ---
+        try:
+            repos = db.execute(text(
+                "SELECT id, name, url, description, platform, tags, openbao_paths, notes, "
+                "created_at, updated_at FROM repositories"
+            )).fetchall()
+            for r in repos:
+                db.execute(
+                    text(
+                        "INSERT INTO items (type, name, url, description, platform, tags, "
+                        "openbao_paths, notes, created_at, updated_at) "
+                        "VALUES ('repository', :name, :url, :description, :platform, :tags, "
+                        ":openbao_paths, :notes, :created_at, :updated_at)"
+                    ),
+                    {
+                        "name": r.name,
+                        "url": r.url,
+                        "description": r.description,
+                        "platform": r.platform,
+                        "tags": r.tags,
+                        "openbao_paths": r.openbao_paths,
+                        "notes": r.notes,
+                        "created_at": r.created_at,
+                        "updated_at": r.updated_at,
+                    },
+                )
+        except Exception:
+            pass
+
+        db.commit()
+    finally:
+        db.close()
+
+
+run_migration()
 
 app = FastAPI(title="Atlas", description="Infrastructure Inventory", version="0.1.0")
 
@@ -20,9 +155,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(devices.router)
-app.include_router(endpoints.router)
-app.include_router(repositories.router)
+app.include_router(items.router)
 app.include_router(networks.router)
 app.include_router(export.router)
 app.include_router(search.router)

@@ -58,116 +58,50 @@ class NetworkOut(NetworkBase):
     model_config = {"from_attributes": True}
 
 
-# --- Device ---
+# --- Item ---
 
-class DeviceBase(BaseModel):
+class ItemBase(BaseModel):
+    type: str
     name: str
+    url: str | None = None
     fqdn: str | None = None
     ips: list[str] = []
-    type: str  # server, container, service, network-device, vm, cloud-resource
+    protocol: str | None = None
     platform: str | None = None
-    status: str = "active"
-    notes: str | None = None
-    openbao_paths: list[str] = []
-    tags: list[str] = []
+    status: str | None = None
+    description: str | None = None
     parent_id: int | None = None
     network_id: int | None = None
+    tags: list[str] = []
+    openbao_paths: list[str] = []
+    notes: str | None = None
 
 
-class DeviceCreate(DeviceBase):
+class ItemCreate(ItemBase):
     pass
 
 
-class DeviceUpdate(BaseModel):
+class ItemUpdate(BaseModel):
+    type: str | None = None
     name: str | None = None
+    url: str | None = None
     fqdn: str | None = None
     ips: list[str] | None = None
-    type: str | None = None
+    protocol: str | None = None
     platform: str | None = None
     status: str | None = None
-    notes: str | None = None
-    openbao_paths: list[str] | None = None
-    tags: list[str] | None = None
+    description: str | None = None
     parent_id: int | None = None
     network_id: int | None = None
+    tags: list[str] | None = None
+    openbao_paths: list[str] | None = None
+    notes: str | None = None
 
 
-class DeviceOut(DeviceBase):
+class ItemOut(ItemBase):
     id: int
     created_at: datetime
     updated_at: datetime
     network: NetworkOut | None = None
-
-    model_config = {"from_attributes": True}
-
-
-class DeviceTree(DeviceOut):
-    children: list["DeviceTree"] = []
-
-
-# --- Repository ---
-
-class RepositoryBase(BaseModel):
-    name: str
-    url: str
-    description: str | None = None
-    platform: str | None = None
-    tags: list[str] = []
-    openbao_paths: list[str] = []
-    notes: str | None = None
-
-
-class RepositoryCreate(RepositoryBase):
-    pass
-
-
-class RepositoryUpdate(BaseModel):
-    name: str | None = None
-    url: str | None = None
-    description: str | None = None
-    platform: str | None = None
-    tags: list[str] | None = None
-    openbao_paths: list[str] | None = None
-    notes: str | None = None
-
-
-class RepositoryOut(RepositoryBase):
-    id: int
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-# --- Endpoint ---
-
-class EndpointBase(BaseModel):
-    label: str
-    url: str
-    protocol: str | None = None
-    device_id: int | None = None
-    tags: list[str] = []
-    openbao_paths: list[str] = []
-    notes: str | None = None
-
-
-class EndpointCreate(EndpointBase):
-    pass
-
-
-class EndpointUpdate(BaseModel):
-    label: str | None = None
-    url: str | None = None
-    protocol: str | None = None
-    device_id: int | None = None
-    tags: list[str] | None = None
-    openbao_paths: list[str] | None = None
-    notes: str | None = None
-
-
-class EndpointOut(EndpointBase):
-    id: int
-    created_at: datetime
-    updated_at: datetime
 
     model_config = {"from_attributes": True}

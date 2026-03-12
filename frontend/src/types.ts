@@ -19,111 +19,35 @@ export interface Network {
   updated_at: string;
 }
 
-export interface Device {
+export interface Item {
   id: number;
+  type: string;
   name: string;
+  url: string | null;
   fqdn: string | null;
   ips: string[];
-  type: string;
+  protocol: string | null;
   platform: string | null;
-  status: string;
-  notes: string | null;
-  openbao_paths: string[];
-  tags: string[];
+  status: string | null;
+  description: string | null;
   parent_id: number | null;
   network_id: number | null;
   network: Network | null;
+  tags: string[];
+  openbao_paths: string[];
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface DeviceTree extends Device {
-  children: DeviceTree[];
-}
+export const ITEM_TYPES = ["server", "vm", "container", "service", "device", "endpoint", "repository", "secret", "document"] as const;
+export type ItemType = typeof ITEM_TYPES[number];
 
-export type DeviceType =
-  | "server"
-  | "container"
-  | "service"
-  | "network-device"
-  | "vm"
-  | "cloud-resource";
-
-export const DEVICE_TYPES: DeviceType[] = [
-  "server",
-  "container",
-  "service",
-  "network-device",
-  "vm",
-  "cloud-resource",
-];
-
-export const PLATFORMS = [
-  "proxmox",
-  "digitalocean",
-  "cloudflare",
-  "bare-metal",
-  "docker",
-  "k8s",
-  "aws",
-  "gcp",
-  "azure",
-  "hetzner",
-  "linode",
-  "other",
-];
-
+export const INFRA_TYPES = ["server", "vm", "container", "service", "device"];
+export const PLATFORMS = ["proxmox", "docker", "digitalocean", "github", "gitlab", "gitea", "bare-metal", "k8s", "aws", "gcp", "azure", "hetzner", "other"];
+export const PROTOCOLS = ["http", "https", "ssh", "tcp", "udp", "grpc", "ws", "wss", "other"];
 export const STATUSES = ["active", "inactive", "unknown"] as const;
 
-export interface Endpoint {
-  id: number;
-  label: string;
-  url: string;
-  protocol: string | null;
-  device_id: number | null;
-  tags: string[];
-  openbao_paths: string[];
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface Repository {
-  id: number;
-  name: string;
-  url: string;
-  description: string | null;
-  platform: string | null;
-  tags: string[];
-  openbao_paths: string[];
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export const REPO_PLATFORMS = [
-  "github",
-  "gitlab",
-  "gitea",
-  "bitbucket",
-  "sourcehut",
-  "other",
-];
-
-export const PROTOCOLS = [
-  "http",
-  "https",
-  "ssh",
-  "tcp",
-  "udp",
-  "grpc",
-  "ws",
-  "wss",
-  "other",
-];
-
 export interface SearchResults {
-  devices: Device[];
-  endpoints: Endpoint[];
-  repositories: Repository[];
+  items: Item[];
 }

@@ -4,36 +4,19 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_token
 from app.database import get_db
-from app.models import Device, Endpoint, Repository
-from app.schemas import DeviceOut, EndpointOut, RepositoryOut
+from app.models import Item
+from app.schemas import ItemOut
 
 router = APIRouter(prefix="/api/search", tags=["search"], dependencies=[Depends(verify_token)])
 
 
-def _serialize_device(device: Device) -> DeviceOut:
-    data = {c.name: getattr(device, c.name) for c in device.__table__.columns}
+def _item_to_out(item: Item) -> ItemOut:
+    data = {c.name: getattr(item, c.name) for c in item.__table__.columns}
     for field in ("ips", "openbao_paths", "tags"):
         val = data.get(field)
         data[field] = json.loads(val) if val else []
-    data["network"] = device.network
-    return DeviceOut.model_validate(data)
-
-
-def _serialize_endpoint(endpoint: Endpoint) -> EndpointOut:
-    data = {c.name: getattr(endpoint, c.name) for c in endpoint.__table__.columns}
-    for field in ("tags", "openbao_paths"):
-        val = data.get(field)
-        data[field] = json.loads(val) if val else []
-    return EndpointOut.model_validate(data)
-
-
-def _serialize_repository(repo: Repository) -> RepositoryOut:
-    import json
-    data = {c.name: getattr(repo, c.name) for c in repo.__table__.columns}
-    for field in ("tags", "openbao_paths"):
-        val = data.get(field)
-        data[field] = json.loads(val) if val else []
-    return RepositoryOut.model_validate(data)
+    data["network"] = item.network
+    return ItemOut.model_validate(data)
 
 
 @router.get("")
@@ -42,11 +25,5 @@ def search_by_tag(
     db: Session = Depends(get_db),
 ):
     pattern = f"%{tag}%"
-    devices = db.query(Device).filter(Device.tags.ilike(pattern)).order_by(Device.name).all()
-    endpoints = db.query(Endpoint).filter(Endpoint.tags.ilike(pattern)).order_by(Endpoint.label).all()
-    repos = db.query(Repository).filter(Repository.tags.ilike(pattern)).order_by(Repository.name).all()
-    return {
-        "devices": [_serialize_device(d) for d in devices],
-        "endpoints": [_serialize_endpoint(e) for e in endpoints],
-        "repositories": [_serialize_repository(r) for r in repos],
-    }
+    items = db.query(Item).filter(Item.tags.ilike(pattern)).order_by(Item.name).all()
+    return {"items": [_item_to_out(i) for i in items]}

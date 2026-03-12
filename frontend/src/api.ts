@@ -1,4 +1,4 @@
-import type { Device, DeviceTree, Network, Range, Endpoint, Repository, SearchResults } from "./types";
+import type { Item, Network, Range, SearchResults } from "./types";
 
 function getToken(): string | null {
   return localStorage.getItem("atlas_token");
@@ -35,19 +35,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-// Devices
-export const listDevices = (params?: Record<string, string>) => {
+// Items
+export const listItems = (params?: Record<string, string>) => {
   const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-  return request<Device[]>(`/api/devices${qs}`);
+  return request<Item[]>(`/api/items${qs}`);
 };
-export const getDevice = (id: number) => request<Device>(`/api/devices/${id}`);
-export const createDevice = (data: Partial<Device>) =>
-  request<Device>("/api/devices", { method: "POST", body: JSON.stringify(data) });
-export const updateDevice = (id: number, data: Partial<Device>) =>
-  request<Device>(`/api/devices/${id}`, { method: "PUT", body: JSON.stringify(data) });
-export const deleteDevice = (id: number) =>
-  request<void>(`/api/devices/${id}`, { method: "DELETE" });
-export const getDeviceTree = () => request<DeviceTree[]>("/api/devices/tree");
+export const getItem = (id: number) => request<Item>(`/api/items/${id}`);
+export const createItem = (data: Partial<Item>) =>
+  request<Item>("/api/items", { method: "POST", body: JSON.stringify(data) });
+export const updateItem = (id: number, data: Partial<Item>) =>
+  request<Item>(`/api/items/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteItem = (id: number) =>
+  request<void>(`/api/items/${id}`, { method: "DELETE" });
 
 // Networks
 export const listNetworks = () => request<Network[]>("/api/networks");
@@ -66,32 +65,6 @@ export const updateRange = (networkId: number, rangeId: number, data: Partial<Ra
   request<Range>(`/api/networks/${networkId}/ranges/${rangeId}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteRange = (networkId: number, rangeId: number) =>
   request<void>(`/api/networks/${networkId}/ranges/${rangeId}`, { method: "DELETE" });
-
-// Endpoints
-export const listEndpoints = (params?: Record<string, string>) => {
-  const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-  return request<Endpoint[]>(`/api/endpoints${qs}`);
-};
-export const getEndpoint = (id: number) => request<Endpoint>(`/api/endpoints/${id}`);
-export const createEndpoint = (data: Partial<Endpoint>) =>
-  request<Endpoint>("/api/endpoints", { method: "POST", body: JSON.stringify(data) });
-export const updateEndpoint = (id: number, data: Partial<Endpoint>) =>
-  request<Endpoint>(`/api/endpoints/${id}`, { method: "PUT", body: JSON.stringify(data) });
-export const deleteEndpoint = (id: number) =>
-  request<void>(`/api/endpoints/${id}`, { method: "DELETE" });
-
-// Repositories
-export const listRepositories = (params?: Record<string, string>) => {
-  const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-  return request<Repository[]>(`/api/repositories${qs}`);
-};
-export const getRepository = (id: number) => request<Repository>(`/api/repositories/${id}`);
-export const createRepository = (data: Partial<Repository>) =>
-  request<Repository>("/api/repositories", { method: "POST", body: JSON.stringify(data) });
-export const updateRepository = (id: number, data: Partial<Repository>) =>
-  request<Repository>(`/api/repositories/${id}`, { method: "PUT", body: JSON.stringify(data) });
-export const deleteRepository = (id: number) =>
-  request<void>(`/api/repositories/${id}`, { method: "DELETE" });
 
 // Search
 export const searchByTag = (tag: string) =>

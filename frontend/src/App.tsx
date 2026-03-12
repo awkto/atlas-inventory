@@ -2,15 +2,9 @@ import { useEffect, useState } from "react";
 import { Routes, Route, NavLink } from "react-router-dom";
 import { checkAuth, setToken } from "./api";
 import { useTheme } from "./theme";
-import DevicesPage from "./pages/DevicesPage";
-import DeviceDetailPage from "./pages/DeviceDetailPage";
-import TreePage from "./pages/TreePage";
+import ItemsPage from "./pages/ItemsPage";
+import ItemDetailPage from "./pages/ItemDetailPage";
 import NetworksPage from "./pages/NetworksPage";
-import NetworkMapPage from "./pages/NetworkMapPage";
-import EndpointsPage from "./pages/EndpointsPage";
-import EndpointDetailPage from "./pages/EndpointDetailPage";
-import RepositoriesPage from "./pages/RepositoriesPage";
-import RepositoryDetailPage from "./pages/RepositoryDetailPage";
 import TagSearchPage from "./pages/TagSearchPage";
 import SettingsPage from "./pages/SettingsPage";
 
@@ -46,12 +40,9 @@ function Login() {
 }
 
 const navItems = [
-  { to: "/", label: "Devices" },
-  { to: "/endpoints", label: "Endpoints" },
-  { to: "/repositories", label: "Repositories" },
-  { to: "/tree", label: "Hierarchy" },
+  { to: "/", label: "Items" },
   { to: "/networks", label: "Networks" },
-  { to: "/network-map", label: "Network Map" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export default function App() {
@@ -95,28 +86,14 @@ export default function App() {
           >
             Export CSV
           </a>
-          <NavLink
-            to="/settings"
-            className={({ isActive }) =>
-              `text-sm hover:text-[var(--text-nav-active)] transition ${isActive ? "text-[var(--text-nav-active)] font-medium" : "text-[var(--text-nav)]"}`
-            }
-          >
-            Settings
-          </NavLink>
         </div>
       </nav>
       <main className="max-w-7xl mx-auto px-6 py-6">
         <Routes>
-          <Route path="/" element={<DevicesPage />} />
-          <Route path="/devices/:id" element={<DeviceDetailPage />} />
-          <Route path="/endpoints" element={<EndpointsPage />} />
-          <Route path="/endpoints/:id" element={<EndpointDetailPage />} />
-          <Route path="/repositories" element={<RepositoriesPage />} />
-          <Route path="/repositories/:id" element={<RepositoryDetailPage />} />
-          <Route path="/search" element={<TagSearchPage />} />
-          <Route path="/tree" element={<TreePage />} />
+          <Route path="/" element={<ItemsPage />} />
+          <Route path="/items/:id" element={<ItemDetailPage />} />
           <Route path="/networks" element={<NetworksPage />} />
-          <Route path="/network-map" element={<NetworkMapPage />} />
+          <Route path="/search" element={<TagSearchPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
