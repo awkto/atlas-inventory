@@ -66,6 +66,7 @@ export default function ItemDetailPage() {
   const isEndpoint = item.type === "endpoint";
   const isRepository = item.type === "repository";
   const isDocument = item.type === "document";
+  const isSecret = item.type === "secret";
 
   if (editing) {
     return (
@@ -130,7 +131,7 @@ export default function ItemDetailPage() {
               <Field label="Network" value={item.network ? item.network.name : null} />
             </>
           )}
-          {(isEndpoint || isRepository || isDocument) && (
+          {(isEndpoint || isRepository || isDocument || isSecret) && (
             <Field
               label="URL"
               value={
@@ -143,7 +144,7 @@ export default function ItemDetailPage() {
             />
           )}
           {isEndpoint && <Field label="Protocol" value={item.protocol} />}
-          {(isRepository || isDocument) && <Field label="Description" value={item.description} />}
+          {(isRepository || isDocument || isSecret) && <Field label="Description" value={item.description} />}
           {isRepository && <Field label="Platform" value={item.platform} />}
         </dl>
 
