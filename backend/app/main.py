@@ -1,13 +1,15 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
+from app.auth import is_first_run, validate_bearer
+from app.config import NOAUTH
 from app.database import Base, engine, SessionLocal
-from app.routers import export, items, networks, search
+from app.routers import auth, export, items, networks, search
 
 Base.metadata.create_all(bind=engine)
 
@@ -175,6 +177,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------------
+# Auth middleware
+# ---------------------------------------------------------------------------
+
+OPEN_PATHS = {
+    "/api/health",
+    "/api/auth/status",
+    "/api/setup",
+    "/api/login",
+    "/api/logout",
+    "/apidocs",
+    "/openapi.json",
+}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+
+    # Always allow open paths
+    if path in OPEN_PATHS or not path.startswith("/api/"):
+        return await call_next(request)
+
+    # NOAUTH mode — skip all auth
+    if NOAUTH:
+        return await call_next(request)
+
+    # If first run, block API access until setup is done
+    if is_first_run():
+        return JSONResponse({"detail": "Setup required"}, status_code=403)
+
+    # Validate bearer token
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+    token = auth_header[7:]
+    if not validate_bearer(token):
+        return JSONResponse({"detail": "Invalid or expired token"}, status_code=401)
+
+    return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Routers
+# ---------------------------------------------------------------------------
+
+app.include_router(auth.router)
 app.include_router(items.router)
 app.include_router(networks.router)
 app.include_router(export.router)

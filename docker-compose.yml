@@ -3,7 +3,7 @@ services:
     build: ./backend
     environment:
       - DATABASE_URL=sqlite:////data/atlas.db
-      - ATLAS_AUTH_TOKEN=${ATLAS_AUTH_TOKEN:-}
+      - NOAUTH=${NOAUTH:-}
     volumes:
       - atlas-data:/data
     ports:

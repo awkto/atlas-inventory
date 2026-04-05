@@ -3,12 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
 from app.database import get_db
 from app.models import Item
 from app.schemas import ItemCreate, ItemOut, ItemUpdate
 
-router = APIRouter(prefix="/api/items", tags=["items"], dependencies=[Depends(verify_token)])
+router = APIRouter(prefix="/api/items", tags=["items"])
 
 
 def _serialize_json_fields(item: Item) -> dict:

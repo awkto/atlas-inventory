@@ -3,7 +3,6 @@ import ipaddress
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
 from app.database import get_db
 from app.models import Network, Range
 from app.schemas import NetworkCreate, NetworkOut, NetworkUpdate, RangeCreate, RangeOut, RangeUpdate
@@ -23,7 +22,7 @@ def _validate_range_in_network(cidr: str, start_ip: str, end_ip: str):
     if start > end:
         raise HTTPException(400, f"Start IP {start_ip} is greater than end IP {end_ip}")
 
-router = APIRouter(prefix="/api/networks", tags=["networks"], dependencies=[Depends(verify_token)])
+router = APIRouter(prefix="/api/networks", tags=["networks"])
 
 
 def _sort_network_ranges(network: Network) -> Network:

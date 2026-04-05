@@ -1,15 +1,17 @@
 import type { Item, Network, Range, SearchResults } from "./types";
 
+const TOKEN_KEY = "atlas_token";
+
 function getToken(): string | null {
-  return localStorage.getItem("atlas_token");
+  return localStorage.getItem(TOKEN_KEY);
 }
 
 export function setToken(token: string) {
-  localStorage.setItem("atlas_token", token);
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
 export function clearToken() {
-  localStorage.removeItem("atlas_token");
+  localStorage.removeItem(TOKEN_KEY);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -73,12 +75,65 @@ export const searchByTag = (tag: string) =>
 // Health
 export const checkHealth = () => request<{ status: string }>("/api/health");
 
-// Auth check
-export const checkAuth = async (): Promise<boolean> => {
-  try {
-    await checkHealth();
-    return true;
-  } catch {
-    return false;
-  }
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export interface AuthStatus {
+  noauth: boolean;
+  first_run: boolean;
+}
+
+export const getAuthStatus = async (): Promise<AuthStatus> => {
+  const res = await fetch("/api/auth/status");
+  return res.json();
 };
+
+export const login = async (password: string): Promise<{ success: boolean; session_token?: string; error?: string }> => {
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    return { success: false, error: data.detail || "Login failed" };
+  }
+  return data;
+};
+
+export const setup = async (password: string): Promise<{ success: boolean; session_token?: string; api_token?: string; error?: string }> => {
+  const res = await fetch("/api/setup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    return { success: false, error: data.detail || "Setup failed" };
+  }
+  return data;
+};
+
+export const logout = async () => {
+  const token = getToken();
+  if (token) {
+    fetch("/api/logout", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => {});
+  }
+  clearToken();
+};
+
+export const changePassword = async (currentPassword: string, newPassword: string) => {
+  return request<{ success: boolean; session_token: string; expires_in: number }>("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+};
+
+export const getApiToken = () => request<{ api_token: string | null; noauth?: boolean }>("/api/auth/token");
+
+export const regenerateApiToken = () =>
+  request<{ success: boolean; api_token: string }>("/api/auth/token/regenerate", { method: "POST" });

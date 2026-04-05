@@ -2,12 +2,11 @@ import json
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
 from app.database import get_db
 from app.models import Item
 from app.schemas import ItemOut
 
-router = APIRouter(prefix="/api/search", tags=["search"], dependencies=[Depends(verify_token)])
+router = APIRouter(prefix="/api/search", tags=["search"])
 
 
 def _item_to_out(item: Item) -> ItemOut:

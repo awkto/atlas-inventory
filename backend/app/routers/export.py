@@ -5,11 +5,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
 from app.database import get_db
 from app.models import Item
 
-router = APIRouter(prefix="/api/export", tags=["export"], dependencies=[Depends(verify_token)])
+router = APIRouter(prefix="/api/export", tags=["export"])
 
 
 @router.get("/csv")
