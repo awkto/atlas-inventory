@@ -4,6 +4,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:////data/atlas.db
       - NOAUTH=${NOAUTH:-}
+      - MCP_ENABLED=${MCP_ENABLED:-true}
     volumes:
       - atlas-data:/data
     ports:

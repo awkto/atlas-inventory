@@ -9,7 +9,7 @@ from sqlalchemy import text
 from app.auth import is_first_run, validate_bearer
 from app.config import NOAUTH
 from app.database import Base, engine, SessionLocal
-from app.routers import auth, export, items, networks, search
+from app.routers import auth, export, items, mcp, networks, search
 
 Base.metadata.create_all(bind=engine)
 
@@ -189,15 +189,18 @@ OPEN_PATHS = {
     "/api/logout",
     "/apidocs",
     "/openapi.json",
+    "/mcpdocs",
 }
+
+MCP_PREFIXES = ("/mcp/",)
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
 
-    # Always allow open paths
-    if path in OPEN_PATHS or not path.startswith("/api/"):
+    # Always allow open paths and MCP paths (MCP handles its own auth)
+    if path in OPEN_PATHS or any(path.startswith(p) for p in MCP_PREFIXES) or not path.startswith("/api/"):
         return await call_next(request)
 
     # NOAUTH mode — skip all auth
@@ -229,6 +232,7 @@ app.include_router(items.router)
 app.include_router(networks.router)
 app.include_router(export.router)
 app.include_router(search.router)
+app.include_router(mcp.router)
 
 
 @app.get("/api/health")
