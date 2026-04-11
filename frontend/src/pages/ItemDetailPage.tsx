@@ -64,7 +64,7 @@ export default function ItemDetailPage() {
 
   const isInfra = INFRA_TYPES.includes(item.type);
   const isEndpoint = item.type === "endpoint";
-  const isRepository = item.type === "repository";
+  const isRepository = item.type === "repository" || item.type === "project";
   const isDocument = item.type === "document";
   const isSecret = item.type === "secret";
 

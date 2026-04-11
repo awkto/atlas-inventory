@@ -10,7 +10,7 @@ function getDetails(item: Item): string {
   if (item.type === "vm") return item.vmid ? `vmid:${item.vmid}${item.fqdn ? " · " + item.fqdn : ""}` : item.fqdn || "";
   if (item.type === "container") return item.ports.length ? item.ports.join(", ") : item.fqdn || "";
   if (INFRA_TYPES.includes(item.type)) return item.fqdn || "";
-  if (item.type === "endpoint" || item.type === "repository" || item.type === "document") return item.url || "";
+  if (item.type === "endpoint" || item.type === "repository" || item.type === "project" || item.type === "document") return item.url || "";
   if (item.type === "secret") return item.openbao_paths[0] || "";
   return "";
 }

@@ -38,7 +38,7 @@ class Item(Base):
     __tablename__ = "items"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    type: Mapped[str] = mapped_column(String(64))  # server, vm, container, service, device, endpoint, repository, secret, document
+    type: Mapped[str] = mapped_column(String(64))  # server, vm, container, service, device, endpoint, repository, project, secret, document
     name: Mapped[str] = mapped_column(String(255))
     url: Mapped[str | None] = mapped_column(String(1024), default=None)
     fqdn: Mapped[str | None] = mapped_column(String(512), default=None)

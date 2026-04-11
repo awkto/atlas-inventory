@@ -42,7 +42,7 @@ export interface Item {
   updated_at: string;
 }
 
-export const ITEM_TYPES = ["server", "vm", "container", "service", "device", "endpoint", "repository", "secret", "document"] as const;
+export const ITEM_TYPES = ["server", "vm", "container", "service", "device", "endpoint", "repository", "project", "secret", "document"] as const;
 export type ItemType = typeof ITEM_TYPES[number];
 
 export const INFRA_TYPES = ["server", "vm", "container", "service", "device"];

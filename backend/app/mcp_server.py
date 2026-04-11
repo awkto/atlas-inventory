@@ -31,7 +31,7 @@ MCP_TOOLS = [
                 },
                 "type": {
                     "type": "string",
-                    "description": "Filter by item type: server, vm, container, service, device, endpoint, repository, secret, document"
+                    "description": "Filter by item type: server, vm, container, service, device, endpoint, repository, project, secret, document"
                 },
                 "platform": {
                     "type": "string",
@@ -74,7 +74,7 @@ MCP_TOOLS = [
             "properties": {
                 "type": {
                     "type": "string",
-                    "description": "Item type: server, vm, container, service, device, endpoint, repository, secret, document"
+                    "description": "Item type: server, vm, container, service, device, endpoint, repository, project, secret, document"
                 },
                 "name": {
                     "type": "string",
