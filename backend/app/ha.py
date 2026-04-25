@@ -384,24 +384,35 @@ def start_sync_scheduler() -> None:
 
 
 def _sync_tick() -> None:
-    if not ha_enabled() or current_role() != "primary":
+    if not ha_enabled():
         return
     if not peer_base_url() or not ha_token():
         return
-    result = push_snapshot_to_peer()
-    if result.get("ok"):
-        if not result.get("skipped"):
-            logger.info(
-                "ha sync: pushed %d bytes (raw=%d, data_version=%s)",
-                result.get("size_bytes", 0), result.get("raw_bytes", 0), result.get("data_version"),
-            )
+
+    role = current_role()
+
+    if role == "primary":
+        result = push_snapshot_to_peer()
+        if result.get("ok"):
+            if not result.get("skipped"):
+                logger.info(
+                    "ha sync: pushed %d bytes (raw=%d, data_version=%s)",
+                    result.get("size_bytes", 0), result.get("raw_bytes", 0), result.get("data_version"),
+                )
+            else:
+                # Nothing to push — probe the peer so the liveness indicator
+                # stays accurate on quiet days.
+                if peer_status() is not None:
+                    _write_meta({"last_seen_peer_at": now_iso()})
         else:
-            # Nothing to push, but verify the peer is still reachable so the
-            # liveness indicator stays accurate even on quiet days.
-            if peer_status() is not None:
-                _write_meta({"last_seen_peer_at": now_iso()})
+            logger.warning("ha sync failed: %s", result.get("reason"))
     else:
-        logger.warning("ha sync failed: %s", result.get("reason"))
+        # Standby: nothing to push, but the primary may not be pushing
+        # anything either (no writes). Probe the primary so we have our
+        # OWN liveness signal — last_received_at alone goes stale on quiet
+        # days, leaving the UI showing "peer unreachable" incorrectly.
+        if peer_status() is not None:
+            _write_meta({"last_seen_peer_at": now_iso()})
 
 
 # ---------------------------------------------------------------------------
@@ -431,18 +442,18 @@ def peer_status() -> dict | None:
 def peer_recently_seen() -> bool:
     """Liveness signal derived from any recent successful peer interaction.
 
-    On the primary: most-recent of last_pushed_at / last_seen_peer_at (the
-    latter is set by the sync tick on quiet days when push is skipped).
-    On the standby: last_received_at (the primary's push proves liveness).
-    Window: 3× sync_interval, so a single missed tick is forgiven.
+    Both sides also probe the peer's /api/ha/status during their sync tick
+    when there's nothing data-plane to do, so last_seen_peer_at gets refreshed
+    even on completely quiet days. Window: 3× sync_interval, so a single
+    missed tick is forgiven.
     """
     meta = _read_meta()
     role = current_role()
-    candidates = []
+    candidates = [meta.get("last_seen_peer_at")]
     if role == "primary":
-        candidates = [meta.get("last_pushed_at"), meta.get("last_seen_peer_at")]
+        candidates.append(meta.get("last_pushed_at"))
     else:
-        candidates = [meta.get("last_received_at")]
+        candidates.append(meta.get("last_received_at"))
     timestamps = [c for c in candidates if c]
     if not timestamps:
         return False
