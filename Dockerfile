@@ -27,7 +27,8 @@ RUN apt-get update \
     | tar -xz -C /usr/local/bin litestream \
  && apt-get purge -y --auto-remove curl \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --shell /usr/sbin/nologin --uid 1500 atlas
+ && useradd --system --shell /usr/sbin/nologin --uid 1500 atlas \
+ && passwd -d atlas
 
 # SFTP-only sshd config + entrypoint that bootstraps host keys + chroot dirs.
 COPY docker/sshd_atlas.conf /etc/ssh/sshd_atlas.conf
