@@ -451,12 +451,13 @@ atexit.register(stop_sshd)
 def reconfigure(changed_key: str = "") -> None:
     logger.info("ha.reconfigure (%s)", changed_key or "startup")
 
-    if ha_enabled() and sshd_available() and sshd_pid() is None:
+    # Start sshd unconditionally if the binary is available — pairing needs
+    # the SFTP endpoint reachable BEFORE HA gets toggled on. The cost of an
+    # idle sshd is trivial; the cost of a chicken-and-egg pairing failure is
+    # not.
+    if sshd_available() and sshd_pid() is None:
         ok, msg = start_sshd()
         logger.info("sshd: ok=%s msg=%s", ok, msg)
-    elif not ha_enabled() and sshd_pid() is not None:
-        stop_sshd()
-        logger.info("sshd stopped (HA disabled)")
 
     if not ha_enabled():
         stop_replicate()
@@ -541,6 +542,11 @@ def call_peer_register(my_id: str, my_base_url: str, my_sftp_host: str, my_pubke
 
 def generate_pairing_secret(my_base_url: str = "", my_sftp_host: str = "") -> dict:
     """Build a pairing bundle on the primary."""
+    # Generating a pairing means we ARE a cluster of (currently) one.
+    # Flip ha.enabled now so Litestream is ready to start the moment the
+    # peer registers — operator doesn't have to toggle it separately.
+    settings.set("ha.enabled", "true")
+
     token = ha_token()
     if not token:
         token = _secrets.token_urlsafe(32)
@@ -653,6 +659,8 @@ def register_incoming_peer(peer_id_letter: str, base_url: str, sftp_host: str, s
     settings.set(f"ha.node_{_slot(pid)}.base_url", base_url)
     settings.set(f"ha.node_{_slot(pid)}.sftp_host", sftp_host)
     settings.set(f"ha.node_{_slot(pid)}.ssh_pubkey", ssh_pubkey)
+    # Belt-and-suspenders: by now the cluster is definitely paired.
+    settings.set("ha.enabled", "true")
     return {"ok": True}
 
 
@@ -707,17 +715,15 @@ def _swap_kek(new_kek: bytes) -> None:
 def on_startup() -> None:
     settings.on_change("ha.", reconfigure)
 
-    if not ha_enabled():
-        logger.info("HA disabled")
-        return
-
-    # Make sure our SSH identity exists before anyone tries to use it.
+    # Generate the SSH identity eagerly so the pubkey is available the moment
+    # an operator clicks "Generate pairing" — no first-call latency.
     try:
         ensure_ssh_client_key()
     except Exception as e:
         logger.warning("could not generate SSH client key: %s", e)
 
+    # Always start sshd if available (see reconfigure() for the why).
     state = load_state()
     role = state.get("role", "primary")
-    logger.info("HA enabled; self_id=%s role=%s", self_id(), role)
+    logger.info("HA self_id=%s role=%s enabled=%s", self_id(), role, ha_enabled())
     reconfigure("startup")
