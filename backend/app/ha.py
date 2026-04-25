@@ -55,6 +55,18 @@ _state_lock = threading.Lock()
 _meta_lock = threading.Lock()
 _scheduler = None
 
+# Shared httpx client so we get connection pooling + proper FD cleanup.
+# Per-call httpx.get/post creates a fresh Client every time and on a quiet
+# day with the frontend polling /api/ha/status, FDs leak under load.
+_http_client: httpx.Client | None = None
+
+
+def _http() -> httpx.Client:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.Client(verify=False, timeout=15.0)
+    return _http_client
+
 
 # ---------------------------------------------------------------------------
 # Local role state (NEVER replicated)
@@ -266,7 +278,7 @@ def push_snapshot_to_peer(force: bool = False) -> dict:
     compressed, raw_size = snap
 
     try:
-        r = httpx.post(
+        r = _http().post(
             f"{base.rstrip('/')}/api/ha/replica-push",
             content=compressed,
             headers={
@@ -276,7 +288,6 @@ def push_snapshot_to_peer(force: bool = False) -> dict:
                 "X-HA-Data-Version": str(version),
             },
             timeout=300.0,
-            verify=False,
         )
     except Exception as e:
         return {"ok": False, "reason": f"peer unreachable: {e}"}
@@ -398,17 +409,18 @@ def _sync_tick() -> None:
 # ---------------------------------------------------------------------------
 
 def peer_status() -> dict | None:
-    """GET /api/ha/status on the peer. Used for split-brain check on failover.
+    """GET /api/ha/status on the peer. Used by sync tick + failover only.
 
-    Best-effort with a generous timeout — cross-network HTTPS through nginx
-    can spike past 5s on the first hit. If we time out here, callers should
-    fall back to peer_recently_seen() for a more reliable liveness signal.
+    NEVER call this from a request path — every call burns a TCP socket and
+    on a quiet day the frontend polls /api/ha/status often enough to leak
+    file descriptors. Status endpoint should derive reachability from the
+    cached `last_seen_peer_at` meta field instead.
     """
     base = peer_base_url()
     if not base:
         return None
     try:
-        r = httpx.get(f"{base.rstrip('/')}/api/ha/status", timeout=15.0, verify=False)
+        r = _http().get(f"{base.rstrip('/')}/api/ha/status")
         if r.status_code == 200:
             return r.json()
     except Exception as e:
@@ -450,10 +462,10 @@ def demote_peer() -> tuple[bool, str]:
     if not token:
         return False, "ha.token not set"
     try:
-        r = httpx.post(
+        r = _http().post(
             f"{base.rstrip('/')}/api/ha/demote",
             headers={"Authorization": f"Bearer {token}"},
-            timeout=10.0, verify=False,
+            timeout=10.0,
         )
         if r.status_code == 200:
             return True, "peer demoted"
@@ -468,11 +480,11 @@ def call_peer_register(my_id: str, my_base_url: str) -> tuple[bool, str]:
     if not base or not token:
         return False, "peer not configured"
     try:
-        r = httpx.post(
+        r = _http().post(
             f"{base.rstrip('/')}/api/ha/register-peer",
             headers={"Authorization": f"Bearer {token}"},
             json={"id": my_id, "base_url": my_base_url},
-            timeout=10.0, verify=False,
+            timeout=10.0,
         )
         if r.status_code == 200:
             return True, "registered"

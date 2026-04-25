@@ -107,11 +107,12 @@ def ha_status():
     except Exception:
         pass
 
-    peer = ha.peer_status()
-    # Reachability is "either I can GET /status from the peer right now, OR
-    # we exchanged a snapshot within the last 2x sync interval" — the latter
-    # is the more reliable signal because it proves the bidirectional
-    # auth + transport is working, not just that an HTTP probe goes through.
+    # Derive reachability from cached metadata — do NOT call peer_status()
+    # here. Frontend polls /api/ha/status often, and a per-request httpx GET
+    # to the peer leaks file descriptors fast enough to take the container
+    # down ("Too many open files"). The sync tick already maintains
+    # last_pushed_at / last_seen_peer_at / last_received_at; reading those
+    # is free and a stronger liveness signal anyway.
     recently_synced = ha.peer_recently_seen()
 
     return {
@@ -120,8 +121,8 @@ def ha_status():
         "self_id": ha.self_id(),
         "peer_id": ha.peer_id(),
         "peer_url": ha.peer_base_url(),
-        "peer_reachable": peer is not None or recently_synced,
-        "peer_role": peer.get("role") if peer else None,
+        "peer_reachable": recently_synced,
+        "peer_role": None,
         "last_promoted_at": state.get("last_promoted_at"),
         "last_demoted_at": state.get("last_demoted_at"),
         "sync_interval_seconds": ha.sync_interval_seconds(),
