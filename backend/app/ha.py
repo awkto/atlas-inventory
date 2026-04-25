@@ -182,6 +182,68 @@ def sync_interval_seconds() -> int:
     return DEFAULT_SYNC_INTERVAL_SECONDS
 
 
+def replication_paused() -> bool:
+    """Operator-set flag — when true, the periodic sync tick skips pushing.
+
+    Manual sync (force=true via /api/ha/sync-now or push_snapshot_to_peer
+    with force=True) still works, so the operator can verify the link or
+    push a one-off update without un-pausing.
+    """
+    return _bool_setting("ha.replication_paused", False)
+
+
+def is_orphaned() -> bool:
+    """Standby-side: primary has explicitly paused replication.
+
+    Derived from the standby's last_seen_peer_at probe (which captures the
+    primary's replication_paused flag). True only when we KNOW the primary
+    paused — distinct from "peer unreachable" which is a comms problem.
+    """
+    if current_role() == "primary":
+        return False
+    return bool(_read_meta().get("peer_replication_paused"))
+
+
+def leave_cluster() -> dict:
+    """Standby-side reset: drop replica + cluster state, return to first-run.
+
+    Wipes:
+      - replica DB + meta
+      - the live DB (was always empty on a standby that never promoted)
+      - settings table (auth, ha.*, encrypted secrets)
+      - local ha.json
+
+    Does NOT wipe SETTINGS_KEK file — next boot regenerates it. After this
+    call returns, the operator should refresh the page; the app will be in
+    first-run state again and they can either set up standalone or re-pair.
+    """
+    if current_role() == "primary":
+        return {"ok": False, "reason": "this node is primary; refusing to reset"}
+
+    stop_replicate_legacy_noop = None  # nothing to stop (no daemon)
+
+    from app.database import engine
+    try:
+        engine.dispose()
+    except Exception:
+        pass
+
+    # Drop replica + meta
+    Path(REPLICA_DB_PATH).unlink(missing_ok=True)
+    Path(REPLICA_META_PATH).unlink(missing_ok=True)
+
+    # Drop live DB + WAL/SHM
+    Path(DB_PATH).unlink(missing_ok=True)
+    for s in ("-wal", "-shm"):
+        Path(DB_PATH + s).unlink(missing_ok=True)
+
+    # Drop local ha.json so role/self_id reset to defaults on next read
+    Path(HA_STATE_PATH).unlink(missing_ok=True)
+
+    settings.invalidate()
+    return {"ok": True, "message": "cluster state reset; refresh the page to begin first-run setup"}
+
+
 # ---------------------------------------------------------------------------
 # Replica metadata
 # ---------------------------------------------------------------------------
@@ -392,6 +454,13 @@ def _sync_tick() -> None:
     role = current_role()
 
     if role == "primary":
+        if replication_paused():
+            # Don't push, but still probe the peer so the liveness indicator
+            # stays accurate while paused.
+            if peer_status() is not None:
+                _write_meta({"last_seen_peer_at": now_iso()})
+            return
+
         result = push_snapshot_to_peer()
         if result.get("ok"):
             if not result.get("skipped"):
@@ -411,8 +480,14 @@ def _sync_tick() -> None:
         # anything either (no writes). Probe the primary so we have our
         # OWN liveness signal — last_received_at alone goes stale on quiet
         # days, leaving the UI showing "peer unreachable" incorrectly.
-        if peer_status() is not None:
-            _write_meta({"last_seen_peer_at": now_iso()})
+        peer = peer_status()
+        if peer is not None:
+            # Capture the primary's replication_paused so we can surface
+            # "orphaned" state in the standby UI without a separate RPC.
+            _write_meta({
+                "last_seen_peer_at": now_iso(),
+                "peer_replication_paused": bool(peer.get("replication_paused")),
+            })
 
 
 # ---------------------------------------------------------------------------

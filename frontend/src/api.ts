@@ -153,6 +153,8 @@ export interface HAStatus {
   last_promoted_at?: string | null;
   last_demoted_at?: string | null;
   sync_interval_seconds?: number;
+  replication_paused?: boolean;
+  is_orphaned?: boolean;
   replica_meta?: {
     last_pushed_at?: string;
     last_pushed_data_version?: number;
@@ -161,6 +163,7 @@ export interface HAStatus {
     last_received_data_version?: string;
     last_received_size_bytes?: number;
     last_seen_peer_at?: string;
+    peer_replication_paused?: boolean;
     sender_id?: string;
   };
   last_backup?: { name: string; size_bytes: number; mtime: string } | null;
@@ -202,6 +205,7 @@ export interface HAConfig {
   peer_id: string;
   token_set: boolean;
   sync_interval_seconds: number;
+  replication_paused: boolean;
   node_a: { base_url: string };
   node_b: { base_url: string };
 }
@@ -213,11 +217,15 @@ export const updateHAConfig = (patch: {
   node_a_base_url?: string;
   node_b_base_url?: string;
   sync_interval_seconds?: number;
+  replication_paused?: boolean;
 }) =>
   request<{ ok: boolean; changed: string[] }>("/api/ha/config", {
     method: "PUT",
     body: JSON.stringify(patch),
   });
+
+export const leaveCluster = () =>
+  request<{ ok: boolean; message: string }>("/api/ha/leave-cluster", { method: "POST" });
 
 export const generatePairing = (my_base_url?: string) =>
   request<{ pairing_secret: string }>("/api/ha/generate-pairing", {

@@ -8,6 +8,7 @@ import {
   listBackups,
   demoteSelf,
   syncNow,
+  leaveCluster,
   type HAStatus,
   type HAConfig,
 } from "../api";
@@ -269,7 +270,10 @@ function PairingCard({ config, onChanged }: { config: HAConfig; onChanged: () =>
 function SyncCard({ status, onSynced }: { status: HAStatus; onSynced: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [pauseBusy, setPauseBusy] = useState(false);
   if (status.role !== "primary") return null;
+
+  const paused = !!status.replication_paused;
 
   const trigger = async () => {
     setBusy(true);
@@ -284,21 +288,102 @@ function SyncCard({ status, onSynced }: { status: HAStatus; onSynced: () => void
     setBusy(false);
   };
 
+  const togglePause = async () => {
+    const next = !paused;
+    if (next && !confirm("Pause auto-replication? The standby will be notified and enter orphaned state. Manual push will still work.")) {
+      return;
+    }
+    setPauseBusy(true);
+    setMsg("");
+    try {
+      await updateHAConfig({ replication_paused: next });
+      setMsg(next ? "Replication paused. Standby will see this on next probe (~30s)." : "Replication resumed.");
+      onSynced();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Toggle failed");
+    }
+    setPauseBusy(false);
+  };
+
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 mb-6">
-      <h2 className="text-sm font-bold text-[var(--text-heading)] mb-3">Replication</h2>
-      <button
-        onClick={trigger}
-        disabled={busy}
-        className="text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--btn-text)] rounded px-3 py-1.5 disabled:opacity-50"
-      >
-        {busy ? "Syncing…" : "Push snapshot now"}
-      </button>
+    <div className={`bg-[var(--bg-card)] border ${paused ? "border-amber-500/60" : "border-[var(--border-card)]"} rounded-lg p-6 mb-6`}>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-bold text-[var(--text-heading)]">Replication</h2>
+        {paused && <span className="text-xs font-bold text-amber-500">PAUSED</span>}
+      </div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <button
+          onClick={trigger}
+          disabled={busy}
+          className="text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--btn-text)] rounded px-3 py-1.5 disabled:opacity-50"
+        >
+          {busy ? "Syncing…" : "Push snapshot now"}
+        </button>
+        <button
+          onClick={togglePause}
+          disabled={pauseBusy}
+          className={`text-sm rounded px-3 py-1.5 disabled:opacity-50 border ${paused
+            ? "bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--btn-text)] border-transparent"
+            : "border-[var(--border-input)] text-[var(--text-heading)]"}`}
+        >
+          {pauseBusy ? "…" : paused ? "Resume replication" : "Pause replication"}
+        </button>
+      </div>
       {msg && <p className="text-xs mt-2 text-[var(--text-muted)]">{msg}</p>}
       <p className="text-xs text-[var(--text-muted)] mt-3">
         Snapshots are pushed automatically every {status.sync_interval_seconds ?? 30}s, but only
-        when <code>PRAGMA data_version</code> has changed since the last push.
+        when <code>PRAGMA data_version</code> has changed since the last push. Pausing stops the
+        scheduled push but leaves the manual button working.
       </p>
+    </div>
+  );
+}
+
+function OrphanBanner({ status, onChanged }: { status: HAStatus; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  if (status.role !== "standby" || !status.is_orphaned) return null;
+
+  const reset = async () => {
+    if (!confirm("Reset this node? Wipes the replicated DB, settings, and pairing — you'll be back at first-run setup. There's no undo.")) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await leaveCluster();
+      alert(r.message);
+      window.location.reload();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Reset failed");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="bg-[var(--bg-card)] border-2 border-amber-500 rounded-lg p-6 mb-6">
+      <h2 className="text-sm font-bold text-amber-500 mb-2">Orphaned — primary has paused replication</h2>
+      <p className="text-xs text-[var(--text-muted)] mb-4 leading-relaxed">
+        The primary is reachable but has stopped replicating to this node. Your local replica
+        won't update until they resume. Two options:
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <p className="text-xs text-[var(--text-muted)]">
+          → <strong>Make this node primary</strong> below if the original primary is going away
+          for good. The DB you have now becomes the cluster's source of truth.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-3 mt-3">
+        <p className="text-xs text-[var(--text-muted)]">
+          → <strong>Reset this node</strong> if you want to leave the cluster entirely and start
+          fresh (or rejoin later as a different standby).
+        </p>
+      </div>
+      <button
+        onClick={reset}
+        disabled={busy}
+        className="mt-4 text-sm text-[var(--danger)] border border-[var(--danger-border)] rounded px-3 py-1.5 disabled:opacity-50"
+      >
+        {busy ? "Resetting…" : "Reset this node (wipe data + leave cluster)"}
+      </button>
     </div>
   );
 }
@@ -421,6 +506,7 @@ export default function ClusterPage() {
   return (
     <div>
       <h1 className="text-xl font-bold text-[var(--text-heading)] mb-6">Cluster</h1>
+      <OrphanBanner status={status} onChanged={refresh} />
       <StatusCard status={status} />
       {showPairing && config && <PairingCard config={config} onChanged={refresh} />}
       {status.enabled && <SyncCard status={status} onSynced={refresh} />}

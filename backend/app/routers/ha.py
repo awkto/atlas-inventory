@@ -43,6 +43,7 @@ class HAConfigUpdate(BaseModel):
     node_a_base_url: str | None = None
     node_b_base_url: str | None = None
     sync_interval_seconds: int | None = None
+    replication_paused: bool | None = None
 
 
 class GeneratePairingRequest(BaseModel):
@@ -123,6 +124,8 @@ def ha_status():
         "peer_url": ha.peer_base_url(),
         "peer_reachable": recently_synced,
         "peer_role": None,
+        "replication_paused": ha.replication_paused(),
+        "is_orphaned": ha.is_orphaned(),
         "last_promoted_at": state.get("last_promoted_at"),
         "last_demoted_at": state.get("last_demoted_at"),
         "sync_interval_seconds": ha.sync_interval_seconds(),
@@ -141,6 +144,7 @@ def get_config(request: Request):
         "peer_id": ha.peer_id(),
         "token_set": bool(ha.ha_token()),
         "sync_interval_seconds": ha.sync_interval_seconds(),
+        "replication_paused": ha.replication_paused(),
         "node_a": {"base_url": ha.node_base_url("A")},
         "node_b": {"base_url": ha.node_base_url("B")},
     }
@@ -162,6 +166,9 @@ def update_config(body: HAConfigUpdate, request: Request):
     if body.sync_interval_seconds is not None:
         settings.set("ha.sync_interval_seconds", str(max(5, body.sync_interval_seconds)))
         changed.append("sync_interval_seconds")
+    if body.replication_paused is not None:
+        settings.set("ha.replication_paused", "true" if body.replication_paused else "false")
+        changed.append("replication_paused")
     return {"ok": True, "changed": changed}
 
 
@@ -271,6 +278,16 @@ def demote(request: Request):
         raise HTTPException(400, "HA is not enabled")
     ha.update_state(role="standby", last_demoted_at=ha.now_iso())
     return {"ok": True, "new_role": "standby"}
+
+
+@router.post("/leave-cluster")
+def leave_cluster(request: Request):
+    """Standby-side reset: wipe local replica + cluster state, back to first-run."""
+    _require_session_or_ha_token(request)
+    result = ha.leave_cluster()
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("reason", "leave-cluster failed"))
+    return result
 
 
 # ---------------------------------------------------------------------------
