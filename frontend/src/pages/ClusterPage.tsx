@@ -81,9 +81,9 @@ function ConfigEditor({
   onSaved: () => void;
 }) {
   const [nodeA_base, setNodeA_base] = useState(config.node_a.base_url);
-  const [nodeA_replica, setNodeA_replica] = useState(config.node_a.replica_url);
+  const [nodeA_sftp, setNodeA_sftp] = useState(config.node_a.sftp_host);
   const [nodeB_base, setNodeB_base] = useState(config.node_b.base_url);
-  const [nodeB_replica, setNodeB_replica] = useState(config.node_b.replica_url);
+  const [nodeB_sftp, setNodeB_sftp] = useState(config.node_b.sftp_host);
   const [enabled, setEnabled] = useState(config.enabled);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -95,9 +95,9 @@ function ConfigEditor({
       await updateHAConfig({
         enabled,
         node_a_base_url: nodeA_base,
-        node_a_replica_url: nodeA_replica,
+        node_a_sftp_host: nodeA_sftp,
         node_b_base_url: nodeB_base,
-        node_b_replica_url: nodeB_replica,
+        node_b_sftp_host: nodeB_sftp,
       });
       setMsg("Saved. Litestream reconfigured if applicable.");
       onSaved();
@@ -132,14 +132,17 @@ function ConfigEditor({
             placeholder="https://host-a:8000"
             className={input + " mb-2"}
           />
-          <label className="block text-xs text-[var(--text-muted)] mb-1">Replica URL</label>
+          <label className="block text-xs text-[var(--text-muted)] mb-1">SFTP host:port</label>
           <input
             type="text"
-            value={nodeA_replica}
-            onChange={(e) => setNodeA_replica(e.target.value)}
-            placeholder="s3://bucket/A or sftp://..."
-            className={input}
+            value={nodeA_sftp}
+            onChange={(e) => setNodeA_sftp(e.target.value)}
+            placeholder="host-a:2222"
+            className={input + " mb-1"}
           />
+          <p className="text-[10px] text-[var(--text-muted)] mt-1">
+            Replica → <span className="font-mono">{config.node_a.replica_url || "(unset)"}</span>
+          </p>
         </div>
         <div>
           <h3 className="text-xs font-bold text-[var(--text-heading)] mb-2">
@@ -153,14 +156,17 @@ function ConfigEditor({
             placeholder="https://host-b:8000"
             className={input + " mb-2"}
           />
-          <label className="block text-xs text-[var(--text-muted)] mb-1">Replica URL</label>
+          <label className="block text-xs text-[var(--text-muted)] mb-1">SFTP host:port</label>
           <input
             type="text"
-            value={nodeB_replica}
-            onChange={(e) => setNodeB_replica(e.target.value)}
-            placeholder="s3://bucket/B or sftp://..."
-            className={input}
+            value={nodeB_sftp}
+            onChange={(e) => setNodeB_sftp(e.target.value)}
+            placeholder="host-b:2222"
+            className={input + " mb-1"}
           />
+          <p className="text-[10px] text-[var(--text-muted)] mt-1">
+            Replica → <span className="font-mono">{config.node_b.replica_url || "(unset)"}</span>
+          </p>
         </div>
       </div>
 
@@ -175,7 +181,7 @@ function ConfigEditor({
         <p className="text-xs text-[var(--text-muted)]">
           Shared token:{" "}
           <span className={config.token_set ? "text-green-500" : "text-amber-500"}>
-            {config.token_set ? "set" : "not set — generate a pairing below"}
+            {config.token_set ? "set" : "not set — pair with a standby below"}
           </span>
         </p>
       </div>
@@ -184,17 +190,23 @@ function ConfigEditor({
   );
 }
 
-function PairingCard({ onChanged }: { onChanged: () => void }) {
+function PairingCard({ config, onChanged }: { config: HAConfig; onChanged: () => void }) {
+  const me = config.self_id.toLowerCase() === "a" ? config.node_a : config.node_b;
+  const [myBaseUrl, setMyBaseUrl] = useState(me.base_url || window.location.origin);
+  const [mySftpHost, setMySftpHost] = useState(me.sftp_host || `${window.location.hostname}:2222`);
   const [secret, setSecret] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  const input =
+    "w-full bg-[var(--bg-input)] border border-[var(--border-input)] rounded px-3 py-1.5 text-xs font-mono text-[var(--text-heading)] focus:outline-none focus:border-[var(--focus-ring)]";
+
   const generate = async () => {
     setBusy(true);
     setErr("");
     try {
-      const r = await generatePairing();
+      const r = await generatePairing(myBaseUrl, mySftpHost);
       setSecret(r.pairing_secret);
       onChanged();
     } catch (e) {
@@ -213,14 +225,30 @@ function PairingCard({ onChanged }: { onChanged: () => void }) {
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 mb-6">
       <h2 className="text-sm font-bold text-[var(--text-heading)] mb-2">Pair a standby</h2>
-      <p className="text-xs text-[var(--text-muted)] mb-3">
-        Generate a pairing secret below, then paste it into the new standby's setup screen. The
-        secret includes the peer URL, the shared HA token, and the settings-encryption key — no
-        further env-var plumbing needed on the standby.
+      <p className="text-xs text-[var(--text-muted)] mb-4">
+        Confirm how this node should be reached, then generate a secret. Paste the secret into
+        the new standby's setup screen — pairing exchanges SSH keys, the HA token, and the
+        settings-encryption key, all in one round-trip.
       </p>
+
+      <label className="block text-xs text-[var(--text-muted)] mb-1">This node's base URL</label>
+      <input
+        type="text"
+        value={myBaseUrl}
+        onChange={(e) => setMyBaseUrl(e.target.value)}
+        className={input + " mb-2"}
+      />
+      <label className="block text-xs text-[var(--text-muted)] mb-1">This node's SFTP host:port</label>
+      <input
+        type="text"
+        value={mySftpHost}
+        onChange={(e) => setMySftpHost(e.target.value)}
+        className={input + " mb-3"}
+      />
+
       <button
         onClick={generate}
-        disabled={busy}
+        disabled={busy || !myBaseUrl || !mySftpHost}
         className="text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--btn-text)] rounded px-4 py-1.5 disabled:opacity-50 mb-3"
       >
         {busy ? "Generating…" : secret ? "Regenerate" : "Generate pairing secret"}
@@ -365,7 +393,7 @@ export default function ClusterPage() {
       <h1 className="text-xl font-bold text-[var(--text-heading)] mb-6">Cluster</h1>
       <StatusCard status={status} />
       {config && <ConfigEditor config={config} onSaved={refresh} />}
-      {status.role === "primary" && <PairingCard onChanged={refresh} />}
+      {status.role === "primary" && config && <PairingCard config={config} onChanged={refresh} />}
       <BackupsCard />
       <DangerCard role={status.role} onChanged={refresh} />
     </div>

@@ -16,19 +16,19 @@ import ClusterPage from "./pages/ClusterPage";
 function JoinClusterForm() {
   const [secret, setSecret] = useState("");
   const [baseUrl, setBaseUrl] = useState(window.location.origin);
-  const [replicaUrl, setReplicaUrl] = useState("");
+  const [sftpHost, setSftpHost] = useState(`${window.location.hostname}:2222`);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const submit = async () => {
     setErr("");
-    if (!secret || !baseUrl || !replicaUrl) {
+    if (!secret || !baseUrl || !sftpHost) {
       setErr("All fields required.");
       return;
     }
     setBusy(true);
     try {
-      await acceptPairing(secret.trim(), baseUrl.trim(), replicaUrl.trim());
+      await acceptPairing(secret.trim(), baseUrl.trim(), sftpHost.trim());
       window.location.reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Pairing failed");
@@ -57,12 +57,12 @@ function JoinClusterForm() {
         placeholder="https://host-b:8000"
         className={input}
       />
-      <label className="block text-sm font-medium text-[var(--text-heading)]">This node's replica URL</label>
+      <label className="block text-sm font-medium text-[var(--text-heading)]">This node's SFTP host:port</label>
       <input
         type="text"
-        value={replicaUrl}
-        onChange={(e) => setReplicaUrl(e.target.value)}
-        placeholder="s3://bucket/B or sftp://..."
+        value={sftpHost}
+        onChange={(e) => setSftpHost(e.target.value)}
+        placeholder="host-b:2222"
         className={input}
       />
       {err && <p className="text-red-500 text-sm">{err}</p>}
@@ -74,8 +74,8 @@ function JoinClusterForm() {
         {busy ? "Pairing…" : "Join cluster as standby"}
       </button>
       <p className="text-xs text-[var(--text-muted)]">
-        After pairing, this node becomes the standby — its admin password and API tokens will
-        replicate in from the primary automatically.
+        Pairing exchanges SSH keys with the primary so it can replicate WAL frames into this
+        node's embedded SFTP server. Replica URLs are derived — no manual storage to set up.
       </p>
     </div>
   );

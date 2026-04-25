@@ -1,11 +1,12 @@
-"""HA role state, Litestream supervisor, peer client.
+"""HA role state, Litestream supervisor, embedded SFTP, peer client.
 
 Configuration precedence:
-  settings table  >  env vars  >  hardcoded defaults
+  settings table  >  env vars  >  defaults
 
-Everything except the local role + self_id lives in the settings table so it
-rides along with Litestream replication. self_id and role stay in
-/data/ha.json (they're identity, not config, and MUST differ between nodes).
+Replica transport is SFTP, served by an `openssh-server` baked into the
+container. Pairing exchanges SSH client pubkeys + sftp_host metadata so
+the operator only enters peer base URL + their own SFTP advertise; replica
+URLs are derived (`sftp://atlas@<peer>/<letter>`).
 """
 import atexit
 import base64
@@ -19,6 +20,7 @@ import subprocess
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
@@ -38,13 +40,20 @@ from app.config import (
 logger = logging.getLogger(__name__)
 
 DB_PATH = DATABASE_URL.replace("sqlite:///", "")
+DATA_DIR = os.path.dirname(DB_PATH) or "/data"
+
+SSH_CLIENT_KEY_PATH = os.path.join(DATA_DIR, "atlas-ssh-key")
+SSH_CLIENT_PUBKEY_PATH = SSH_CLIENT_KEY_PATH + ".pub"
+AUTHORIZED_KEYS_PATH = os.path.join(DATA_DIR, "atlas-authorized_keys")
+LITESTREAM_CONFIG_PATH = os.path.join(DATA_DIR, "litestream.yml")
 
 _state_lock = threading.Lock()
 _litestream_proc: subprocess.Popen | None = None
+_sshd_proc: subprocess.Popen | None = None
 
 
 # ---------------------------------------------------------------------------
-# Role + self_id state (local, /data/ha.json — NEVER replicated)
+# Local role state (NEVER replicated)
 # ---------------------------------------------------------------------------
 
 def _state_path() -> Path:
@@ -135,25 +144,40 @@ def _slot(letter: str) -> str:
 
 
 def node_base_url(letter: str) -> str:
-    key = f"ha.node_{_slot(letter)}.base_url"
-    v = settings.get(key)
+    v = settings.get(f"ha.node_{_slot(letter)}.base_url")
     if v:
         return v
-    # Env fallback only makes sense for the "peer" slot; self base URL
-    # is usually not configured locally.
     if letter.upper() == peer_id():
         return HA_PEER_URL or ""
     return ""
 
 
-def node_replica_url(letter: str) -> str:
-    key = f"ha.node_{_slot(letter)}.replica_url"
-    v = settings.get(key)
+def node_sftp_host(letter: str) -> str:
+    """Return host:port the peer should SFTP into for this node's replica."""
+    v = settings.get(f"ha.node_{_slot(letter)}.sftp_host")
     if v:
         return v
-    if letter.upper() == self_id():
-        return HA_REPLICA_URL_SELF or ""
-    return HA_REPLICA_URL_PEER or ""
+    base = node_base_url(letter)
+    if not base:
+        return ""
+    parsed = urlparse(base)
+    host = parsed.hostname or ""
+    return f"{host}:2222" if host else ""
+
+
+def node_replica_url(letter: str) -> str:
+    """Derived: sftp://atlas@<peer-sftp-host>/<LETTER> using this node's SSH client key."""
+    sftp = node_sftp_host(letter)
+    if not sftp:
+        # Backward-compat: respect a manually configured replica URL if
+        # someone set one in v1.8.0 before upgrading.
+        legacy = settings.get(f"ha.node_{_slot(letter)}.replica_url")
+        if legacy:
+            return legacy
+        if letter.upper() == self_id():
+            return HA_REPLICA_URL_SELF or ""
+        return HA_REPLICA_URL_PEER or ""
+    return f"sftp://atlas@{sftp}/{letter.upper()}"
 
 
 def self_replica_url() -> str:
@@ -169,7 +193,115 @@ def peer_base_url() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Litestream supervisor
+# SSH client identity (this node's identity for SFTP'ing to peers)
+# ---------------------------------------------------------------------------
+
+def ensure_ssh_client_key() -> str:
+    """Create an ed25519 keypair on first call. Returns the public key."""
+    if os.path.exists(SSH_CLIENT_KEY_PATH) and os.path.exists(SSH_CLIENT_PUBKEY_PATH):
+        return Path(SSH_CLIENT_PUBKEY_PATH).read_text().strip()
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+    Path(SSH_CLIENT_KEY_PATH).unlink(missing_ok=True)
+    Path(SSH_CLIENT_PUBKEY_PATH).unlink(missing_ok=True)
+    cmd = [
+        "ssh-keygen", "-t", "ed25519",
+        "-f", SSH_CLIENT_KEY_PATH,
+        "-N", "",
+        "-C", f"atlas-{self_id()}@{datetime.now(timezone.utc).date().isoformat()}",
+        "-q",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ssh-keygen failed: {result.stderr}")
+    os.chmod(SSH_CLIENT_KEY_PATH, 0o600)
+    return Path(SSH_CLIENT_PUBKEY_PATH).read_text().strip()
+
+
+def ssh_client_pubkey() -> str:
+    if not os.path.exists(SSH_CLIENT_PUBKEY_PATH):
+        return ensure_ssh_client_key()
+    return Path(SSH_CLIENT_PUBKEY_PATH).read_text().strip()
+
+
+def install_peer_pubkey(pubkey: str) -> bool:
+    """Append a peer's SSH client pubkey to authorized_keys (idempotent)."""
+    if not pubkey or not pubkey.strip():
+        return False
+    pubkey = pubkey.strip()
+    Path(AUTHORIZED_KEYS_PATH).touch(exist_ok=True)
+    existing = Path(AUTHORIZED_KEYS_PATH).read_text() if os.path.exists(AUTHORIZED_KEYS_PATH) else ""
+    # Match on the key body (ignore comment) so the same key under a different
+    # comment is still detected as a duplicate.
+    key_body = " ".join(pubkey.split()[:2])
+    for line in existing.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        if " ".join(line.split()[:2]) == key_body:
+            return False
+    with open(AUTHORIZED_KEYS_PATH, "a") as f:
+        if existing and not existing.endswith("\n"):
+            f.write("\n")
+        f.write(pubkey + "\n")
+    try:
+        os.chmod(AUTHORIZED_KEYS_PATH, 0o600)
+    except OSError:
+        pass
+    return True
+
+
+# ---------------------------------------------------------------------------
+# sshd supervisor (embedded SFTP server)
+# ---------------------------------------------------------------------------
+
+def sshd_available() -> bool:
+    return shutil.which("sshd") is not None or os.path.exists("/usr/sbin/sshd")
+
+
+def sshd_pid() -> int | None:
+    if _sshd_proc and _sshd_proc.poll() is None:
+        return _sshd_proc.pid
+    return None
+
+
+def start_sshd() -> tuple[bool, str]:
+    global _sshd_proc
+    stop_sshd()
+
+    if not sshd_available():
+        return False, "sshd binary not installed"
+    cfg = "/etc/ssh/sshd_atlas.conf"
+    if not os.path.exists(cfg):
+        return False, f"sshd config not found at {cfg}"
+
+    cmd = ["/usr/sbin/sshd", "-D", "-e", "-f", cfg]
+    logger.info("starting sshd (atlas SFTP) -f %s", cfg)
+    try:
+        _sshd_proc = subprocess.Popen(cmd)
+    except Exception as e:
+        return False, f"sshd spawn failed: {e}"
+    return True, f"pid {_sshd_proc.pid}"
+
+
+def stop_sshd() -> None:
+    global _sshd_proc
+    if _sshd_proc is None:
+        return
+    proc = _sshd_proc
+    _sshd_proc = None
+    if proc.poll() is not None:
+        return
+    try:
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Litestream supervisor — uses YAML config for SFTP key-path
 # ---------------------------------------------------------------------------
 
 def litestream_available() -> bool:
@@ -182,23 +314,58 @@ def litestream_pid() -> int | None:
     return None
 
 
+def _build_litestream_config() -> str | None:
+    """Render YAML config for the current peer set. Returns None if HA not ready."""
+    url = self_replica_url()
+    if not url:
+        return None
+
+    # Parse SFTP URL: sftp://USER@HOST:PORT/PATH
+    if url.startswith("sftp://"):
+        rest = url[7:]
+        userhost, _, path = rest.partition("/")
+        user, _, hostport = userhost.partition("@")
+        host, _, port_s = hostport.partition(":")
+        port = int(port_s) if port_s else 22
+        replica_block = (
+            "      - type: sftp\n"
+            f"        host: {host}\n"
+            f"        port: {port}\n"
+            f"        user: {user or 'atlas'}\n"
+            f"        key-path: {SSH_CLIENT_KEY_PATH}\n"
+            f"        path: /{path}\n"
+        )
+    elif url.startswith(("s3://", "gs://", "abs://", "file://")):
+        replica_block = f"      - url: {url}\n"
+    else:
+        return None
+
+    return (
+        "dbs:\n"
+        f"  - path: {DB_PATH}\n"
+        "    replicas:\n"
+        f"{replica_block}"
+    )
+
+
 def start_replicate() -> tuple[bool, str]:
-    """Start `litestream replicate` pushing local DB → self replica URL."""
     global _litestream_proc
     stop_replicate()
 
     if not ha_enabled():
         return False, "HA disabled"
-    url = self_replica_url()
-    if not url:
-        return False, "self replica URL not configured"
     if not litestream_available():
         return False, "litestream binary not installed"
     if not os.path.exists(DB_PATH):
         return False, f"db not found at {DB_PATH}"
 
-    cmd = ["litestream", "replicate", DB_PATH, url]
-    logger.info("starting litestream: %s", " ".join(["litestream", "replicate", DB_PATH, "<redacted>"]))
+    cfg = _build_litestream_config()
+    if not cfg:
+        return False, "self replica URL not configured"
+
+    Path(LITESTREAM_CONFIG_PATH).write_text(cfg)
+    cmd = ["litestream", "replicate", "-config", LITESTREAM_CONFIG_PATH]
+    logger.info("starting litestream replicate -config %s", LITESTREAM_CONFIG_PATH)
     try:
         _litestream_proc = subprocess.Popen(cmd)
     except Exception as e:
@@ -225,7 +392,6 @@ def stop_replicate() -> None:
 
 
 def run_restore(replica_url: str) -> tuple[bool, str]:
-    """Overwrite the local DB from `replica_url`. Caller must ensure no active writers."""
     if not replica_url:
         return False, "replica URL not set"
     if not litestream_available():
@@ -233,8 +399,32 @@ def run_restore(replica_url: str) -> tuple[bool, str]:
 
     tmp = DB_PATH + ".restore"
     Path(tmp).unlink(missing_ok=True)
-    cmd = ["litestream", "restore", "-o", tmp, replica_url]
-    logger.info("restoring from replica: litestream restore -o %s <redacted>", tmp)
+
+    if replica_url.startswith("sftp://"):
+        # Build a YAML config restore-source — easier than the URL form for SFTP.
+        rest = replica_url[7:]
+        userhost, _, path = rest.partition("/")
+        user, _, hostport = userhost.partition("@")
+        host, _, port_s = hostport.partition(":")
+        port = int(port_s) if port_s else 22
+        cfg = (
+            "dbs:\n"
+            f"  - path: {DB_PATH}\n"
+            "    replicas:\n"
+            "      - type: sftp\n"
+            f"        host: {host}\n"
+            f"        port: {port}\n"
+            f"        user: {user or 'atlas'}\n"
+            f"        key-path: {SSH_CLIENT_KEY_PATH}\n"
+            f"        path: /{path}\n"
+        )
+        cfg_path = LITESTREAM_CONFIG_PATH + ".restore"
+        Path(cfg_path).write_text(cfg)
+        cmd = ["litestream", "restore", "-config", cfg_path, "-o", tmp, DB_PATH]
+    else:
+        cmd = ["litestream", "restore", "-o", tmp, replica_url]
+
+    logger.info("restoring from replica (peer)")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     except Exception as e:
@@ -246,37 +436,42 @@ def run_restore(replica_url: str) -> tuple[bool, str]:
     os.replace(tmp, DB_PATH)
     for suffix in ("-wal", "-shm"):
         Path(DB_PATH + suffix).unlink(missing_ok=True)
-    # Restored DB may contain a different settings table — drop the cache so
-    # the next reads come from the new rows.
     settings.invalidate()
     return True, "restored"
 
 
 atexit.register(stop_replicate)
+atexit.register(stop_sshd)
 
 
 # ---------------------------------------------------------------------------
-# Dynamic reconfigure — called when any ha.* setting changes
+# Dynamic reconfigure
 # ---------------------------------------------------------------------------
 
 def reconfigure(changed_key: str = "") -> None:
-    """React to HA setting changes. Restart litestream if primary; stop if not."""
-    logger.info("ha.reconfigure triggered by %s", changed_key or "startup")
+    logger.info("ha.reconfigure (%s)", changed_key or "startup")
+
+    if ha_enabled() and sshd_available() and sshd_pid() is None:
+        ok, msg = start_sshd()
+        logger.info("sshd: ok=%s msg=%s", ok, msg)
+    elif not ha_enabled() and sshd_pid() is not None:
+        stop_sshd()
+        logger.info("sshd stopped (HA disabled)")
+
     if not ha_enabled():
         stop_replicate()
         return
-    state = load_state()
-    role = state.get("role", "primary")
+
+    role = load_state().get("role", "primary")
     if role == "primary":
         ok, msg = start_replicate()
         logger.info("reconfigure → replicate: ok=%s msg=%s", ok, msg)
     else:
         stop_replicate()
-        logger.info("reconfigure → standby, litestream idle")
 
 
 # ---------------------------------------------------------------------------
-# Peer client
+# Peer HTTP client
 # ---------------------------------------------------------------------------
 
 def peer_status() -> dict | None:
@@ -313,96 +508,196 @@ def demote_peer() -> tuple[bool, str]:
         return False, f"peer unreachable: {e}"
 
 
+def call_peer_register(my_id: str, my_base_url: str, my_sftp_host: str, my_pubkey: str) -> tuple[bool, str]:
+    base = peer_base_url()
+    if not base:
+        return False, "peer base URL not configured"
+    token = ha_token()
+    if not token:
+        return False, "ha.token not configured"
+    try:
+        r = httpx.post(
+            f"{base.rstrip('/')}/api/ha/register-peer",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "id": my_id,
+                "base_url": my_base_url,
+                "sftp_host": my_sftp_host,
+                "ssh_pubkey": my_pubkey,
+            },
+            timeout=10.0,
+            verify=False,
+        )
+        if r.status_code == 200:
+            return True, "peer registered us"
+        return False, f"peer returned {r.status_code}: {r.text[:300]}"
+    except Exception as e:
+        return False, f"peer unreachable: {e}"
+
+
 # ---------------------------------------------------------------------------
-# Pairing secret — encoded bundle exchanged between nodes during setup
+# Pairing — exchange config + SSH client pubkeys
 # ---------------------------------------------------------------------------
 
-def generate_pairing_secret(include_kek: bool = True) -> dict:
-    """Create pairing bundle on the primary. Called via /api/ha/generate-pairing."""
-    # Ensure a shared HA token exists
+def generate_pairing_secret(my_base_url: str = "", my_sftp_host: str = "") -> dict:
+    """Build a pairing bundle on the primary."""
     token = ha_token()
     if not token:
         token = _secrets.token_urlsafe(32)
         settings.set("ha.token", token, encrypted=True)
 
     me = self_id()
+    pubkey = ensure_ssh_client_key()
+
+    # Use provided values or settings; never invent a wrong default here.
+    base_url = my_base_url or node_base_url(me)
+    sftp_host = my_sftp_host or node_sftp_host(me)
+
+    # Persist self info so subsequent pairings are consistent
+    if base_url:
+        settings.set(f"ha.node_{_slot(me)}.base_url", base_url)
+    if sftp_host:
+        settings.set(f"ha.node_{_slot(me)}.sftp_host", sftp_host)
+
     payload = {
-        "v": 1,
+        "v": 2,
         "primary_self_id": me,
-        "primary_base_url": node_base_url(me),
-        "primary_replica_url": node_replica_url(me),
+        "primary_base_url": base_url,
+        "primary_sftp_host": sftp_host,
+        "primary_ssh_pubkey": pubkey,
         "ha_token": token,
     }
-    if include_kek:
-        # Include the KEK so the standby can decrypt replicated secrets after
-        # Litestream ships the settings table. Pasted once, out-of-band.
-        from app.settings import _resolve_kek  # internal — intentional
-        payload["kek"] = base64.urlsafe_b64encode(_resolve_kek()).decode()
+    # Include the KEK so encrypted settings replicated via the DB stay
+    # decryptable on the standby.
+    from app.settings import _resolve_kek
+    payload["kek"] = base64.urlsafe_b64encode(_resolve_kek()).decode()
 
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
-    return {"pairing_secret": encoded, "expires_hint": "valid as long as the primary's ha.token hasn't changed"}
+    return {"pairing_secret": encoded}
 
 
-def accept_pairing_secret(encoded: str, my_base_url: str, my_replica_url: str) -> dict:
-    """Run on a fresh standby. Returns a structured result."""
+def accept_pairing_secret(encoded: str, my_base_url: str, my_sftp_host: str) -> dict:
+    """Run on a fresh standby."""
     try:
         decoded = json.loads(base64.urlsafe_b64decode(encoded.encode()).decode())
     except Exception as e:
         return {"ok": False, "reason": f"invalid pairing secret: {e}"}
 
-    if decoded.get("v") != 1:
-        return {"ok": False, "reason": "pairing version mismatch"}
+    if decoded.get("v") != 2:
+        return {"ok": False, "reason": "pairing version mismatch (need v2)"}
 
     primary_id = (decoded.get("primary_self_id") or "").upper()
     if primary_id not in ("A", "B"):
-        return {"ok": False, "reason": "pairing missing valid primary_self_id"}
+        return {"ok": False, "reason": "missing primary_self_id"}
 
     my_id = "B" if primary_id == "A" else "A"
 
-    # Install KEK if provided — required for encrypted settings from peer to decrypt
+    # Re-encrypt currently-encrypted rows with the incoming KEK so existing
+    # settings (e.g. local API token from first-run) stay decryptable.
     kek_b64 = decoded.get("kek")
     if kek_b64:
-        kek_bytes = base64.urlsafe_b64decode(kek_b64.encode())
-        from app.config import SETTINGS_KEK_PATH
-        Path(SETTINGS_KEK_PATH).parent.mkdir(parents=True, exist_ok=True)
-        Path(SETTINGS_KEK_PATH).write_bytes(kek_bytes)
-        try:
-            os.chmod(SETTINGS_KEK_PATH, 0o600)
-        except OSError:
-            pass
-        # Force Fernet to re-init on next use
-        import app.settings as _s
-        _s._fernet = None
-        settings.invalidate()
+        new_kek = base64.urlsafe_b64decode(kek_b64.encode())
+        _swap_kek(new_kek)
 
-    # Primary's config
+    primary_pubkey = decoded.get("primary_ssh_pubkey", "")
+    if primary_pubkey:
+        install_peer_pubkey(primary_pubkey)
+
+    # Generate own SSH client identity
+    my_pubkey = ensure_ssh_client_key()
+
+    # Persist primary's coords + token
     settings.set(f"ha.node_{_slot(primary_id)}.base_url", decoded.get("primary_base_url", ""))
-    if decoded.get("primary_replica_url"):
-        settings.set(
-            f"ha.node_{_slot(primary_id)}.replica_url",
-            decoded["primary_replica_url"],
-            encrypted=True,
-        )
+    settings.set(f"ha.node_{_slot(primary_id)}.sftp_host", decoded.get("primary_sftp_host", ""))
+    settings.set(f"ha.node_{_slot(primary_id)}.ssh_pubkey", primary_pubkey)
     settings.set("ha.token", decoded["ha_token"], encrypted=True)
 
-    # This node's own config
+    # Persist this node's coords
     settings.set(f"ha.node_{_slot(my_id)}.base_url", my_base_url)
-    settings.set(f"ha.node_{_slot(my_id)}.replica_url", my_replica_url, encrypted=True)
+    settings.set(f"ha.node_{_slot(my_id)}.sftp_host", my_sftp_host)
+    settings.set(f"ha.node_{_slot(my_id)}.ssh_pubkey", my_pubkey)
 
-    # Flip role + self_id locally
+    # Local role state
     update_state(self_id=my_id, role="standby")
 
-    # Enable HA (won't spawn Litestream because role is standby)
+    # Enable HA — won't spawn Litestream because role=standby, but will start sshd
     settings.set("ha.enabled", "true")
 
-    # Ping peer to confirm
+    # Tell the primary about us so it can install our pubkey + know how to
+    # SFTP into our replica slot.
+    registered, register_msg = call_peer_register(
+        my_id, my_base_url, my_sftp_host, my_pubkey
+    )
+
     peer = peer_status()
     return {
         "ok": True,
         "self_id": my_id,
+        "registered_with_peer": registered,
+        "register_msg": register_msg,
         "peer_reachable": peer is not None,
         "peer_role": peer.get("role") if peer else None,
     }
+
+
+def register_incoming_peer(peer_id_letter: str, base_url: str, sftp_host: str, ssh_pubkey: str) -> dict:
+    """Called by the standby on the primary as the second leg of pairing."""
+    pid = peer_id_letter.upper()
+    if pid not in ("A", "B"):
+        return {"ok": False, "reason": "invalid peer id"}
+    if pid == self_id():
+        return {"ok": False, "reason": "peer claims our self_id"}
+
+    if ssh_pubkey:
+        install_peer_pubkey(ssh_pubkey)
+    settings.set(f"ha.node_{_slot(pid)}.base_url", base_url)
+    settings.set(f"ha.node_{_slot(pid)}.sftp_host", sftp_host)
+    settings.set(f"ha.node_{_slot(pid)}.ssh_pubkey", ssh_pubkey)
+    return {"ok": True}
+
+
+def _swap_kek(new_kek: bytes) -> None:
+    """Re-encrypt all existing encrypted rows with the new KEK, then install it."""
+    from app.config import SETTINGS_KEK_PATH
+    from cryptography.fernet import Fernet, InvalidToken
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    import app.settings as _s
+
+    old_fernet = _s._get_fernet()
+    new_fernet = Fernet(new_kek)
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(text("SELECT key, value FROM settings WHERE encrypted=1")).fetchall()
+        re_encrypted = []
+        for key, encrypted_value in rows:
+            try:
+                plain = old_fernet.decrypt(encrypted_value.encode()).decode()
+            except InvalidToken:
+                logger.warning("could not decrypt %s during KEK swap; leaving stale", key)
+                continue
+            re_encrypted.append((key, new_fernet.encrypt(plain.encode()).decode()))
+        for key, new_value in re_encrypted:
+            db.execute(
+                text("UPDATE settings SET value=:v, updated_at=CURRENT_TIMESTAMP WHERE key=:k"),
+                {"k": key, "v": new_value},
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    # Install new KEK on disk
+    Path(SETTINGS_KEK_PATH).parent.mkdir(parents=True, exist_ok=True)
+    Path(SETTINGS_KEK_PATH).write_bytes(new_kek)
+    try:
+        os.chmod(SETTINGS_KEK_PATH, 0o600)
+    except OSError:
+        pass
+
+    # Force settings module to re-init Fernet on next use
+    _s._fernet = None
+    settings.invalidate()
 
 
 # ---------------------------------------------------------------------------
@@ -410,12 +705,17 @@ def accept_pairing_secret(encoded: str, my_base_url: str, my_replica_url: str) -
 # ---------------------------------------------------------------------------
 
 def on_startup() -> None:
-    # React to future settings changes
     settings.on_change("ha.", reconfigure)
 
     if not ha_enabled():
         logger.info("HA disabled")
         return
+
+    # Make sure our SSH identity exists before anyone tries to use it.
+    try:
+        ensure_ssh_client_key()
+    except Exception as e:
+        logger.warning("could not generate SSH client key: %s", e)
 
     state = load_state()
     role = state.get("role", "primary")

@@ -27,6 +27,10 @@ services:
       - atlas-data:/data
     ports:
       - "8000:8000"
+      # SFTP endpoint for HA replication. Map to whatever host port you want
+      # the peer to reach this container on; pass the same host:port as
+      # "this node's SFTP host" during pairing.
+      - "2222:22"
 
   frontend:
     build: ./frontend

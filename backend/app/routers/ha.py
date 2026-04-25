@@ -40,15 +40,27 @@ class FailoverRequest(BaseModel):
 class HAConfigUpdate(BaseModel):
     enabled: bool | None = None
     node_a_base_url: str | None = None
-    node_a_replica_url: str | None = None
+    node_a_sftp_host: str | None = None
     node_b_base_url: str | None = None
-    node_b_replica_url: str | None = None
+    node_b_sftp_host: str | None = None
+
+
+class GeneratePairingRequest(BaseModel):
+    my_base_url: str | None = None
+    my_sftp_host: str | None = None
 
 
 class AcceptPairingRequest(BaseModel):
     pairing_secret: str
     my_base_url: str
-    my_replica_url: str
+    my_sftp_host: str
+
+
+class RegisterPeerRequest(BaseModel):
+    id: str
+    base_url: str
+    sftp_host: str
+    ssh_pubkey: str
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +126,7 @@ def ha_status():
         "last_demoted_at": state.get("last_demoted_at"),
         "litestream_pid": ha.litestream_pid(),
         "litestream_available": ha.litestream_available(),
+        "sshd_pid": ha.sshd_pid(),
         "last_backup": backup.last_backup_info(),
         "data_version": data_version,
     }
@@ -121,19 +134,22 @@ def ha_status():
 
 @router.get("/config")
 def get_config(request: Request):
-    """Full HA config for the operator UI. Masks secrets."""
+    """Full HA config for the operator UI. Replica URLs are derived."""
     _require_session_or_ha_token(request)
     return {
         "enabled": ha.ha_enabled(),
         "self_id": ha.self_id(),
         "peer_id": ha.peer_id(),
         "token_set": bool(ha.ha_token()),
+        "ssh_pubkey": ha.ssh_client_pubkey() if ha.sshd_available() else "",
         "node_a": {
             "base_url": ha.node_base_url("A"),
+            "sftp_host": ha.node_sftp_host("A"),
             "replica_url": ha.node_replica_url("A"),
         },
         "node_b": {
             "base_url": ha.node_base_url("B"),
+            "sftp_host": ha.node_sftp_host("B"),
             "replica_url": ha.node_replica_url("B"),
         },
     }
@@ -149,45 +165,53 @@ def update_config(body: HAConfigUpdate, request: Request):
     if body.node_a_base_url is not None:
         settings.set("ha.node_a.base_url", body.node_a_base_url)
         changed.append("node_a.base_url")
-    if body.node_a_replica_url is not None:
-        settings.set("ha.node_a.replica_url", body.node_a_replica_url, encrypted=True)
-        changed.append("node_a.replica_url")
+    if body.node_a_sftp_host is not None:
+        settings.set("ha.node_a.sftp_host", body.node_a_sftp_host)
+        changed.append("node_a.sftp_host")
     if body.node_b_base_url is not None:
         settings.set("ha.node_b.base_url", body.node_b_base_url)
         changed.append("node_b.base_url")
-    if body.node_b_replica_url is not None:
-        settings.set("ha.node_b.replica_url", body.node_b_replica_url, encrypted=True)
-        changed.append("node_b.replica_url")
+    if body.node_b_sftp_host is not None:
+        settings.set("ha.node_b.sftp_host", body.node_b_sftp_host)
+        changed.append("node_b.sftp_host")
     return {"ok": True, "changed": changed}
 
 
 @router.post("/generate-pairing")
-def generate_pairing(request: Request):
-    """Primary emits a pairing bundle (base64) — paste into the standby's UI."""
+def generate_pairing(body: GeneratePairingRequest, request: Request):
+    """Primary emits a pairing bundle. Pass this node's base + sftp host so
+    the bundle carries the right contact info for the standby to use."""
     _require_session_or_ha_token(request)
     if ha.load_state().get("role") != "primary":
         raise HTTPException(400, "only the primary can generate a pairing secret")
-    return ha.generate_pairing_secret()
+    return ha.generate_pairing_secret(
+        my_base_url=body.my_base_url or "",
+        my_sftp_host=body.my_sftp_host or "",
+    )
 
 
 @router.post("/accept-pairing")
 def accept_pairing(body: AcceptPairingRequest, request: Request):
-    """Standby accepts a pairing secret.
-
-    When this node has no local password set (fresh install), this endpoint is
-    open — the operator hasn't had a chance to log in yet. Once a password is
-    set, session/HA-token auth is required.
-    """
     if not is_first_run():
         _require_session_or_ha_token(request)
 
     result = ha.accept_pairing_secret(
         body.pairing_secret,
         body.my_base_url,
-        body.my_replica_url,
+        body.my_sftp_host,
     )
     if not result.get("ok"):
         raise HTTPException(400, result.get("reason", "pairing failed"))
+    return result
+
+
+@router.post("/register-peer")
+def register_peer(body: RegisterPeerRequest, request: Request):
+    """Second leg of pairing — standby tells primary its sftp host + pubkey."""
+    _require_ha_token(request)
+    result = ha.register_incoming_peer(body.id, body.base_url, body.sftp_host, body.ssh_pubkey)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("reason", "register failed"))
     return result
 
 
@@ -213,6 +237,10 @@ def failover(body: FailoverRequest, request: Request):
             },
         )
 
+    # On promotion, restore from THIS node's slot in the peer's storage —
+    # which is the slot the (now-old) primary was writing into. Our self_id
+    # is the letter that primary was uploading FROM, but they were uploading
+    # to /<their letter>/. Translation: peer_replica_url() == sftp://<peer>/<peer_id>
     restored, restore_msg = ha.run_restore(ha.peer_replica_url())
     if not restored:
         logger.warning("restore skipped/failed (continuing): %s", restore_msg)

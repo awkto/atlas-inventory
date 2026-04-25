@@ -191,8 +191,9 @@ export interface HAConfig {
   self_id: string;
   peer_id: string;
   token_set: boolean;
-  node_a: { base_url: string; replica_url: string };
-  node_b: { base_url: string; replica_url: string };
+  ssh_pubkey: string;
+  node_a: { base_url: string; sftp_host: string; replica_url: string };
+  node_b: { base_url: string; sftp_host: string; replica_url: string };
 }
 
 export const getHAConfig = () => request<HAConfig>("/api/ha/config");
@@ -200,34 +201,41 @@ export const getHAConfig = () => request<HAConfig>("/api/ha/config");
 export const updateHAConfig = (patch: {
   enabled?: boolean;
   node_a_base_url?: string;
-  node_a_replica_url?: string;
+  node_a_sftp_host?: string;
   node_b_base_url?: string;
-  node_b_replica_url?: string;
+  node_b_sftp_host?: string;
 }) =>
   request<{ ok: boolean; changed: string[] }>("/api/ha/config", {
     method: "PUT",
     body: JSON.stringify(patch),
   });
 
-export const generatePairing = () =>
-  request<{ pairing_secret: string; expires_hint: string }>("/api/ha/generate-pairing", {
+export const generatePairing = (my_base_url?: string, my_sftp_host?: string) =>
+  request<{ pairing_secret: string }>("/api/ha/generate-pairing", {
     method: "POST",
+    body: JSON.stringify({ my_base_url, my_sftp_host }),
   });
 
 export const acceptPairing = async (
   pairing_secret: string,
   my_base_url: string,
-  my_replica_url: string,
+  my_sftp_host: string,
 ) => {
-  // Works even with no session (fresh standby, pre-first-run).
   const res = await fetch("/api/ha/accept-pairing", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pairing_secret, my_base_url, my_replica_url }),
+    body: JSON.stringify({ pairing_secret, my_base_url, my_sftp_host }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail || res.statusText);
-  return body as { ok: boolean; self_id: string; peer_reachable: boolean; peer_role: string | null };
+  return body as {
+    ok: boolean;
+    self_id: string;
+    registered_with_peer: boolean;
+    register_msg: string;
+    peer_reachable: boolean;
+    peer_role: string | null;
+  };
 };
 
 export const demoteSelf = async () => {
