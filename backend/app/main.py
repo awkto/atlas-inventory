@@ -209,7 +209,7 @@ async def gateway_middleware(request: Request, call_next):
 
     # HA middleware: if this node is a standby, block everything except HA
     # endpoints and health.
-    if HA_ENABLED and ha.current_role() == "standby":
+    if ha.ha_enabled() and ha.current_role() == "standby":
         if path == "/api/health" or path.startswith(HA_PREFIX) or not path.startswith("/api/"):
             return await call_next(request)
         return JSONResponse(

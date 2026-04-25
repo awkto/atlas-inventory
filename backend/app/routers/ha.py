@@ -1,15 +1,16 @@
 """HA status + operator endpoints.
 
 Routing layout:
-- /api/ha/status        — open (peer polls this)
-- /api/ha/demote        — HA_TOKEN auth (peer-triggered)
-- /api/ha/failover      — session OR HA_TOKEN auth (operator-triggered)
-- /api/ha/backup        — session auth (manual backup trigger)
-- /api/ha/backups       — session auth (list)
+- /api/ha/status            — open (peer polls this)
+- /api/ha/demote            — HA_TOKEN auth (peer-triggered)
+- /api/ha/failover          — session OR HA_TOKEN auth
+- /api/ha/backup / /backups — session OR HA_TOKEN auth
+- /api/ha/config GET/PUT    — session auth (operator)
+- /api/ha/generate-pairing  — session auth (on primary)
+- /api/ha/accept-pairing    — open when fresh (no password set yet), else session auth
 
-All of these are in OPEN_PATHS at the middleware level; each endpoint
-enforces its own auth. This lets the standby serve HA endpoints even when
-it has no admin password configured locally (fresh standby scenario).
+All HA endpoints bypass the gateway's auth gate and self-authenticate here,
+which lets a fresh standby accept pairing before first-run.
 """
 import hmac
 import logging
@@ -18,16 +19,9 @@ import sqlite3
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from app import backup, ha
-from app.auth import validate_bearer
-from app.config import (
-    DATABASE_URL,
-    HA_ENABLED,
-    HA_PEER_URL,
-    HA_REPLICA_URL_PEER,
-    HA_SELF_ID,
-    HA_TOKEN,
-)
+from app import backup, ha, settings
+from app.auth import is_first_run, validate_bearer
+from app.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ha", tags=["ha"])
@@ -43,6 +37,20 @@ class FailoverRequest(BaseModel):
     force: bool = False
 
 
+class HAConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    node_a_base_url: str | None = None
+    node_a_replica_url: str | None = None
+    node_b_base_url: str | None = None
+    node_b_replica_url: str | None = None
+
+
+class AcceptPairingRequest(BaseModel):
+    pairing_secret: str
+    my_base_url: str
+    my_replica_url: str
+
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -53,21 +61,22 @@ def _bearer(request: Request) -> str | None:
 
 
 def _require_ha_token(request: Request) -> None:
-    if not HA_TOKEN:
-        raise HTTPException(500, "HA_TOKEN not configured")
-    token = _bearer(request)
-    if not token or not hmac.compare_digest(token, HA_TOKEN):
+    token = ha.ha_token()
+    if not token:
+        raise HTTPException(500, "ha.token not configured")
+    provided = _bearer(request)
+    if not provided or not hmac.compare_digest(provided, token):
         raise HTTPException(401, "invalid or missing HA token")
 
 
 def _require_session_or_ha_token(request: Request) -> None:
-    """Accept either a valid session/API-token (local operator) or HA_TOKEN."""
-    token = _bearer(request)
-    if not token:
+    provided = _bearer(request)
+    if not provided:
         raise HTTPException(401, "missing bearer token")
-    if validate_bearer(token):
+    if validate_bearer(provided):
         return
-    if HA_TOKEN and hmac.compare_digest(token, HA_TOKEN):
+    token = ha.ha_token()
+    if token and hmac.compare_digest(provided, token):
         return
     raise HTTPException(401, "invalid token")
 
@@ -79,7 +88,7 @@ def _require_session_or_ha_token(request: Request) -> None:
 @router.get("/status")
 def ha_status():
     """Open endpoint — returns role, peer health, replication + backup state."""
-    if not HA_ENABLED:
+    if not ha.ha_enabled():
         return {"enabled": False, "role": "primary"}
 
     state = ha.load_state()
@@ -96,8 +105,9 @@ def ha_status():
     return {
         "enabled": True,
         "role": state.get("role"),
-        "self_id": HA_SELF_ID,
-        "peer_url": HA_PEER_URL,
+        "self_id": ha.self_id(),
+        "peer_id": ha.peer_id(),
+        "peer_url": ha.peer_base_url(),
         "peer_reachable": peer is not None,
         "peer_role": peer.get("role") if peer else None,
         "last_promoted_at": state.get("last_promoted_at"),
@@ -109,12 +119,83 @@ def ha_status():
     }
 
 
+@router.get("/config")
+def get_config(request: Request):
+    """Full HA config for the operator UI. Masks secrets."""
+    _require_session_or_ha_token(request)
+    return {
+        "enabled": ha.ha_enabled(),
+        "self_id": ha.self_id(),
+        "peer_id": ha.peer_id(),
+        "token_set": bool(ha.ha_token()),
+        "node_a": {
+            "base_url": ha.node_base_url("A"),
+            "replica_url": ha.node_replica_url("A"),
+        },
+        "node_b": {
+            "base_url": ha.node_base_url("B"),
+            "replica_url": ha.node_replica_url("B"),
+        },
+    }
+
+
+@router.put("/config")
+def update_config(body: HAConfigUpdate, request: Request):
+    _require_session_or_ha_token(request)
+    changed = []
+    if body.enabled is not None:
+        settings.set("ha.enabled", "true" if body.enabled else "false")
+        changed.append("enabled")
+    if body.node_a_base_url is not None:
+        settings.set("ha.node_a.base_url", body.node_a_base_url)
+        changed.append("node_a.base_url")
+    if body.node_a_replica_url is not None:
+        settings.set("ha.node_a.replica_url", body.node_a_replica_url, encrypted=True)
+        changed.append("node_a.replica_url")
+    if body.node_b_base_url is not None:
+        settings.set("ha.node_b.base_url", body.node_b_base_url)
+        changed.append("node_b.base_url")
+    if body.node_b_replica_url is not None:
+        settings.set("ha.node_b.replica_url", body.node_b_replica_url, encrypted=True)
+        changed.append("node_b.replica_url")
+    return {"ok": True, "changed": changed}
+
+
+@router.post("/generate-pairing")
+def generate_pairing(request: Request):
+    """Primary emits a pairing bundle (base64) — paste into the standby's UI."""
+    _require_session_or_ha_token(request)
+    if ha.load_state().get("role") != "primary":
+        raise HTTPException(400, "only the primary can generate a pairing secret")
+    return ha.generate_pairing_secret()
+
+
+@router.post("/accept-pairing")
+def accept_pairing(body: AcceptPairingRequest, request: Request):
+    """Standby accepts a pairing secret.
+
+    When this node has no local password set (fresh install), this endpoint is
+    open — the operator hasn't had a chance to log in yet. Once a password is
+    set, session/HA-token auth is required.
+    """
+    if not is_first_run():
+        _require_session_or_ha_token(request)
+
+    result = ha.accept_pairing_secret(
+        body.pairing_secret,
+        body.my_base_url,
+        body.my_replica_url,
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("reason", "pairing failed"))
+    return result
+
+
 @router.post("/failover")
 def failover(body: FailoverRequest, request: Request):
-    """Promote this node (standby → primary). Operator-triggered."""
     _require_session_or_ha_token(request)
 
-    if not HA_ENABLED:
+    if not ha.ha_enabled():
         raise HTTPException(400, "HA is not enabled")
 
     state = ha.load_state()
@@ -127,19 +208,17 @@ def failover(body: FailoverRequest, request: Request):
             status_code=409,
             detail={
                 "error": "peer is still primary",
-                "hint": "set force=true only if you are certain the peer is unreachable from clients",
-                "peer": {"role": peer.get("role"), "url": HA_PEER_URL},
+                "hint": "set force=true only if you are certain the peer is unreachable",
+                "peer": {"role": peer.get("role"), "url": ha.peer_base_url()},
             },
         )
 
-    # Pull the latest WAL from the peer's replica slot before flipping role.
-    restored, restore_msg = ha.run_restore(HA_REPLICA_URL_PEER)
+    restored, restore_msg = ha.run_restore(ha.peer_replica_url())
     if not restored:
         logger.warning("restore skipped/failed (continuing): %s", restore_msg)
 
     ha.update_state(role="primary", last_promoted_at=ha.now_iso())
     started, start_msg = ha.start_replicate()
-
     demoted, demote_msg = ha.demote_peer()
 
     return {
@@ -156,10 +235,9 @@ def failover(body: FailoverRequest, request: Request):
 
 @router.post("/demote")
 def demote(request: Request):
-    """Peer-triggered demotion (primary → standby). Authenticated by HA_TOKEN."""
     _require_ha_token(request)
 
-    if not HA_ENABLED:
+    if not ha.ha_enabled():
         raise HTTPException(400, "HA is not enabled")
 
     ha.stop_replicate()
@@ -169,7 +247,6 @@ def demote(request: Request):
 
 @router.post("/backup")
 def trigger_backup(request: Request, force: bool = False):
-    """Run a backup now (respects skip-if-unchanged unless force=true)."""
     _require_session_or_ha_token(request)
     return backup.run_backup(force=force)
 

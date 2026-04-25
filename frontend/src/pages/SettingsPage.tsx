@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useTheme, type Theme } from "../theme";
 import {
   logout,
@@ -6,11 +6,6 @@ import {
   regenerateApiToken,
   changePassword,
   setToken,
-  getHAStatus,
-  triggerFailover,
-  triggerBackup,
-  listBackups,
-  type HAStatus,
 } from "../api";
 
 const themes: { id: Theme; label: string; desc: string }[] = [
@@ -159,140 +154,6 @@ function ChangePasswordSection() {
   );
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function HASection() {
-  const [status, setStatus] = useState<HAStatus | null>(null);
-  const [backups, setBackups] = useState<Array<{ name: string; size_bytes: number; mtime: string }>>([]);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string>("");
-
-  const refresh = async () => {
-    const s = await getHAStatus();
-    setStatus(s);
-    if (s.enabled) {
-      try {
-        setBackups(await listBackups());
-      } catch {
-        setBackups([]);
-      }
-    }
-  };
-
-  useEffect(() => {
-    refresh().catch(() => {});
-  }, []);
-
-  if (!status) return null;
-  if (!status.enabled) {
-    return (
-      <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 max-w-xl mb-6">
-        <h2 className="text-sm font-bold text-[var(--text-heading)] mb-2">High Availability</h2>
-        <p className="text-xs text-[var(--text-muted)]">
-          HA is disabled. Set <code>HA_ENABLED=true</code> and the replica URLs to enable.
-        </p>
-      </div>
-    );
-  }
-
-  const handleBackup = async () => {
-    setBusy(true);
-    setMessage("");
-    try {
-      const r = await triggerBackup();
-      setMessage(r.skipped ? `Skipped — ${r.reason}` : `Backup created: ${formatBytes(r.size_bytes ?? 0)}`);
-      await refresh();
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Backup failed");
-    }
-    setBusy(false);
-  };
-
-  const handleDemote = async () => {
-    if (!confirm("Demote this node to standby? Writes will stop here.")) return;
-    setBusy(true);
-    setMessage("");
-    try {
-      // Same endpoint used peer-to-peer; calling it locally with the session
-      // token works when session-or-HA-token auth is accepted.
-      const res = await fetch("/api/ha/demote", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("atlas_token") ?? ""}` },
-      });
-      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-      setMessage("Demoted to standby.");
-      await refresh();
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Demote failed");
-    }
-    setBusy(false);
-  };
-
-  return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 max-w-xl mb-6">
-      <h2 className="text-sm font-bold text-[var(--text-heading)] mb-4">High Availability</h2>
-
-      <dl className="text-xs space-y-1 mb-4">
-        <Row label="Role" value={<span className={status.role === "primary" ? "text-green-500" : "text-amber-500"}>{status.role}</span>} />
-        <Row label="Self ID" value={status.self_id ?? "—"} />
-        <Row label="Peer" value={`${status.peer_url ?? "—"} (${status.peer_reachable ? status.peer_role ?? "unknown" : "unreachable"})`} />
-        <Row label="Litestream" value={status.litestream_pid ? `running (pid ${status.litestream_pid})` : status.litestream_available ? "idle" : "binary not installed"} />
-        <Row label="Last promoted" value={status.last_promoted_at ?? "never"} />
-        <Row label="Last demoted" value={status.last_demoted_at ?? "never"} />
-        <Row label="data_version" value={String(status.data_version ?? "—")} />
-      </dl>
-
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={handleBackup}
-          disabled={busy}
-          className="text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--btn-text)] rounded px-3 py-1.5 disabled:opacity-50"
-        >
-          Run backup now
-        </button>
-        {status.role === "primary" && (
-          <button
-            onClick={handleDemote}
-            disabled={busy}
-            className="text-sm text-[var(--danger)] border border-[var(--danger-border)] rounded px-3 py-1.5 disabled:opacity-50"
-          >
-            Demote to standby
-          </button>
-        )}
-      </div>
-
-      {message && <p className="text-xs mb-3 text-[var(--text-muted)]">{message}</p>}
-
-      <h3 className="text-xs font-bold text-[var(--text-heading)] mb-2">Local backups ({backups.length})</h3>
-      {backups.length === 0 ? (
-        <p className="text-xs text-[var(--text-muted)]">None yet. Backups run every {Math.round(900 / 60)} min; earlier backups are pruned after retention.</p>
-      ) : (
-        <ul className="text-xs font-mono space-y-0.5 max-h-48 overflow-auto">
-          {backups.map((b) => (
-            <li key={b.name} className="flex justify-between text-[var(--text-muted)]">
-              <span>{b.name}</span>
-              <span>{formatBytes(b.size_bytes)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <dt className="text-[var(--text-muted)]">{label}</dt>
-      <dd className="text-[var(--text-heading)] font-mono text-right">{value}</dd>
-    </div>
-  );
-}
-
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
 
@@ -330,7 +191,6 @@ export default function SettingsPage() {
 
       <ApiTokenSection />
       <ChangePasswordSection />
-      <HASection />
 
       <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 max-w-xl">
         <h2 className="text-sm font-bold text-[var(--text-heading)] mb-4">Session</h2>

@@ -185,3 +185,56 @@ export const triggerBackup = () =>
 
 export const listBackups = () =>
   request<Array<{ name: string; size_bytes: number; mtime: string }>>("/api/ha/backups");
+
+export interface HAConfig {
+  enabled: boolean;
+  self_id: string;
+  peer_id: string;
+  token_set: boolean;
+  node_a: { base_url: string; replica_url: string };
+  node_b: { base_url: string; replica_url: string };
+}
+
+export const getHAConfig = () => request<HAConfig>("/api/ha/config");
+
+export const updateHAConfig = (patch: {
+  enabled?: boolean;
+  node_a_base_url?: string;
+  node_a_replica_url?: string;
+  node_b_base_url?: string;
+  node_b_replica_url?: string;
+}) =>
+  request<{ ok: boolean; changed: string[] }>("/api/ha/config", {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+
+export const generatePairing = () =>
+  request<{ pairing_secret: string; expires_hint: string }>("/api/ha/generate-pairing", {
+    method: "POST",
+  });
+
+export const acceptPairing = async (
+  pairing_secret: string,
+  my_base_url: string,
+  my_replica_url: string,
+) => {
+  // Works even with no session (fresh standby, pre-first-run).
+  const res = await fetch("/api/ha/accept-pairing", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pairing_secret, my_base_url, my_replica_url }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body as { ok: boolean; self_id: string; peer_reachable: boolean; peer_role: string | null };
+};
+
+export const demoteSelf = async () => {
+  const res = await fetch("/api/ha/demote", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${localStorage.getItem(TOKEN_KEY) ?? ""}` },
+  });
+  if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+  return res.json();
+};

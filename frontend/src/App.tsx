@@ -1,18 +1,88 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, NavLink } from "react-router-dom";
-import { getAuthStatus, getHAStatus, login, setup, setToken, clearToken, logout, triggerFailover, type HAStatus } from "./api";
+import { getAuthStatus, getHAStatus, login, setup, setToken, clearToken, logout, triggerFailover, acceptPairing, type HAStatus } from "./api";
 import { useTheme } from "./theme";
 import ItemsPage from "./pages/ItemsPage";
 import ItemDetailPage from "./pages/ItemDetailPage";
 import NetworksPage from "./pages/NetworksPage";
 import TagSearchPage from "./pages/TagSearchPage";
 import SettingsPage from "./pages/SettingsPage";
+import ClusterPage from "./pages/ClusterPage";
 
 // ---------------------------------------------------------------------------
 // Setup screen (first run)
 // ---------------------------------------------------------------------------
 
+function JoinClusterForm() {
+  const [secret, setSecret] = useState("");
+  const [baseUrl, setBaseUrl] = useState(window.location.origin);
+  const [replicaUrl, setReplicaUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    setErr("");
+    if (!secret || !baseUrl || !replicaUrl) {
+      setErr("All fields required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await acceptPairing(secret.trim(), baseUrl.trim(), replicaUrl.trim());
+      window.location.reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Pairing failed");
+    }
+    setBusy(false);
+  };
+
+  const input =
+    "w-full bg-[var(--bg-input)] border border-[var(--border-input)] rounded px-3 py-2 text-xs font-mono text-[var(--text-heading)] focus:outline-none focus:border-[var(--focus-ring)]";
+
+  return (
+    <div className="space-y-3">
+      <label className="block text-sm font-medium text-[var(--text-heading)]">Pairing secret</label>
+      <textarea
+        value={secret}
+        onChange={(e) => setSecret(e.target.value)}
+        rows={3}
+        placeholder="Paste the pairing secret generated on the primary"
+        className={input}
+      />
+      <label className="block text-sm font-medium text-[var(--text-heading)]">This node's base URL</label>
+      <input
+        type="text"
+        value={baseUrl}
+        onChange={(e) => setBaseUrl(e.target.value)}
+        placeholder="https://host-b:8000"
+        className={input}
+      />
+      <label className="block text-sm font-medium text-[var(--text-heading)]">This node's replica URL</label>
+      <input
+        type="text"
+        value={replicaUrl}
+        onChange={(e) => setReplicaUrl(e.target.value)}
+        placeholder="s3://bucket/B or sftp://..."
+        className={input}
+      />
+      {err && <p className="text-red-500 text-sm">{err}</p>}
+      <button
+        onClick={submit}
+        disabled={busy}
+        className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--btn-text)] font-medium rounded px-4 py-2 text-sm disabled:opacity-50"
+      >
+        {busy ? "Pairing…" : "Join cluster as standby"}
+      </button>
+      <p className="text-xs text-[var(--text-muted)]">
+        After pairing, this node becomes the standby — its admin password and API tokens will
+        replicate in from the primary automatically.
+      </p>
+    </div>
+  );
+}
+
 function SetupScreen() {
+  const [mode, setMode] = useState<"new" | "join">("new");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -68,9 +138,24 @@ function SetupScreen() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--bg-page)]">
-      <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-8 w-full max-w-sm">
+      <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-8 w-full max-w-md">
         <h1 className="text-xl font-bold mb-2 text-center text-[var(--accent-brand)]">Atlas</h1>
-        <p className="text-[var(--text-muted)] text-sm mb-6 text-center">Welcome — create an admin password to get started.</p>
+        <div className="flex gap-1 mb-4 p-1 bg-[var(--bg-input)] rounded">
+          <button
+            onClick={() => setMode("new")}
+            className={`flex-1 text-xs py-1.5 rounded ${mode === "new" ? "bg-[var(--bg-card)] text-[var(--text-heading)]" : "text-[var(--text-muted)]"}`}
+          >
+            Create new
+          </button>
+          <button
+            onClick={() => setMode("join")}
+            className={`flex-1 text-xs py-1.5 rounded ${mode === "join" ? "bg-[var(--bg-card)] text-[var(--text-heading)]" : "text-[var(--text-muted)]"}`}
+          >
+            Join existing cluster
+          </button>
+        </div>
+        {mode === "join" ? <JoinClusterForm /> : <>
+        <p className="text-[var(--text-muted)] text-sm mb-6 text-center">Create an admin password to get started.</p>
         <label className="block text-sm font-medium text-[var(--text-heading)] mb-1">Password <span className="text-[var(--text-muted)] font-normal">(min. 8 characters)</span></label>
         <input
           type="password"
@@ -101,6 +186,7 @@ function SetupScreen() {
         <p className="text-[var(--text-muted)] text-xs mt-3 text-center">
           An API token will be generated for programmatic access.
         </p>
+        </>}
       </div>
     </div>
   );
@@ -249,6 +335,7 @@ function LoginScreen() {
 const navItems = [
   { to: "/", label: "Items" },
   { to: "/networks", label: "Networks" },
+  { to: "/cluster", label: "Cluster" },
   { to: "/settings", label: "Settings" },
 ];
 
@@ -341,6 +428,7 @@ export default function App() {
           <Route path="/items/:id" element={<ItemDetailPage />} />
           <Route path="/networks" element={<NetworksPage />} />
           <Route path="/search" element={<TagSearchPage />} />
+          <Route path="/cluster" element={<ClusterPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
