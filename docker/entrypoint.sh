@@ -12,13 +12,15 @@ mkdir -p /data/ssh-host-keys
     ssh-keygen -t rsa -b 4096 -f /data/ssh-host-keys/ssh_host_rsa_key -N "" -q
 chmod 600 /data/ssh-host-keys/ssh_host_*_key
 
-# Replica inbound layout. ChrootDirectory requires the chroot root to be
-# owned by root and not world-writable, with user-owned subdirs underneath.
-mkdir -p /data/replica-inbound /data/replica-inbound/A /data/replica-inbound/B
-chown root:root /data/replica-inbound
-chmod 755 /data/replica-inbound
-chown atlas:atlas /data/replica-inbound/A /data/replica-inbound/B
-chmod 755 /data/replica-inbound/A /data/replica-inbound/B
+# Replica inbound layout. The chroot root + all its ancestors must be
+# root-owned (sshd enforces this strictly). /srv/replica-inbound is set up
+# in the Dockerfile; we just ensure the per-letter subdirs exist and are
+# atlas-owned so internal-sftp can write into them.
+mkdir -p /srv/replica-inbound/A /srv/replica-inbound/B
+chown root:root /srv /srv/replica-inbound
+chmod 755 /srv /srv/replica-inbound
+chown atlas:atlas /srv/replica-inbound/A /srv/replica-inbound/B
+chmod 755 /srv/replica-inbound/A /srv/replica-inbound/B
 
 # Authorized peer pubkeys — managed by app/ha.py; sshd reads at connect time.
 touch /data/atlas-authorized_keys

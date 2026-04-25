@@ -28,7 +28,10 @@ RUN apt-get update \
  && apt-get purge -y --auto-remove curl \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --shell /usr/sbin/nologin --uid 1500 atlas \
- && passwd -d atlas
+ && passwd -d atlas \
+ && mkdir -p /srv/replica-inbound \
+ && chown root:root /srv /srv/replica-inbound \
+ && chmod 755 /srv /srv/replica-inbound
 
 # SFTP-only sshd config + entrypoint that bootstraps host keys + chroot dirs.
 COPY docker/sshd_atlas.conf /etc/ssh/sshd_atlas.conf

@@ -188,7 +188,7 @@ def peer_replica_url() -> str:
     legacy = settings.get(f"ha.node_{_slot(peer_id())}.replica_url")
     if legacy:
         return legacy
-    return f"file:///data/replica-inbound/{peer_id()}"
+    return f"file:///srv/replica-inbound/{peer_id()}"
 
 
 def node_replica_url(letter: str) -> str:
