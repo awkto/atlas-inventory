@@ -165,27 +165,40 @@ def node_sftp_host(letter: str) -> str:
     return f"{host}:2222" if host else ""
 
 
-def node_replica_url(letter: str) -> str:
-    """Derived: sftp://atlas@<peer-sftp-host>/<LETTER> using this node's SSH client key."""
-    sftp = node_sftp_host(letter)
-    if not sftp:
-        # Backward-compat: respect a manually configured replica URL if
-        # someone set one in v1.8.0 before upgrading.
-        legacy = settings.get(f"ha.node_{_slot(letter)}.replica_url")
+def self_replica_url() -> str:
+    """Where I push WAL → the PEER's SFTP inbox, into MY letter's directory.
+
+    Each node's embedded SFTP receives the peer's writes into
+    /data/replica-inbound/<peer-letter>/. So when I (letter X) push, I push
+    to sftp://atlas@<peer-sftp-host>/<X>, and that lands inside the peer's
+    /data/replica-inbound/X/.
+    """
+    peer_sftp = node_sftp_host(peer_id())
+    if not peer_sftp:
+        legacy = settings.get(f"ha.node_{_slot(self_id())}.replica_url")
         if legacy:
             return legacy
-        if letter.upper() == self_id():
-            return HA_REPLICA_URL_SELF or ""
-        return HA_REPLICA_URL_PEER or ""
-    return f"sftp://atlas@{sftp}/{letter.upper()}"
-
-
-def self_replica_url() -> str:
-    return node_replica_url(self_id())
+        return HA_REPLICA_URL_SELF or ""
+    return f"sftp://atlas@{peer_sftp}/{self_id()}"
 
 
 def peer_replica_url() -> str:
-    return node_replica_url(peer_id())
+    """Where I restore from on promotion → my LOCAL inbox, where the (now-old)
+    primary was SFTP'ing into me. No remote read needed at promotion time."""
+    legacy = settings.get(f"ha.node_{_slot(peer_id())}.replica_url")
+    if legacy:
+        return legacy
+    return f"file:///data/replica-inbound/{peer_id()}"
+
+
+def node_replica_url(letter: str) -> str:
+    """For UI display only — show what each node's logical replica destination
+    looks like from its own perspective."""
+    if letter.upper() == self_id():
+        return self_replica_url()
+    if letter.upper() == peer_id():
+        return f"sftp://atlas@{node_sftp_host(self_id())}/{peer_id()}"
+    return ""
 
 
 def peer_base_url() -> str:
