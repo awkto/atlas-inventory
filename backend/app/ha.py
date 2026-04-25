@@ -378,12 +378,18 @@ def _sync_tick() -> None:
     if not peer_base_url() or not ha_token():
         return
     result = push_snapshot_to_peer()
-    if result.get("ok") and not result.get("skipped"):
-        logger.info(
-            "ha sync: pushed %d bytes (raw=%d, data_version=%s)",
-            result.get("size_bytes", 0), result.get("raw_bytes", 0), result.get("data_version"),
-        )
-    elif not result.get("ok"):
+    if result.get("ok"):
+        if not result.get("skipped"):
+            logger.info(
+                "ha sync: pushed %d bytes (raw=%d, data_version=%s)",
+                result.get("size_bytes", 0), result.get("raw_bytes", 0), result.get("data_version"),
+            )
+        else:
+            # Nothing to push, but verify the peer is still reachable so the
+            # liveness indicator stays accurate even on quiet days.
+            if peer_status() is not None:
+                _write_meta({"last_seen_peer_at": now_iso()})
+    else:
         logger.warning("ha sync failed: %s", result.get("reason"))
 
 
@@ -411,24 +417,29 @@ def peer_status() -> dict | None:
 
 
 def peer_recently_seen() -> bool:
-    """Liveness signal derived from successful sync activity.
+    """Liveness signal derived from any recent successful peer interaction.
 
-    The replication path is the most reliable evidence of "peer is talking to
-    us": on the primary, a recent successful push proves the peer accepted
-    auth and wrote the bytes; on the standby, a recent receive proves the
-    primary is alive. Window: 2× sync_interval (a single missed tick is fine).
+    On the primary: most-recent of last_pushed_at / last_seen_peer_at (the
+    latter is set by the sync tick on quiet days when push is skipped).
+    On the standby: last_received_at (the primary's push proves liveness).
+    Window: 3× sync_interval, so a single missed tick is forgiven.
     """
     meta = _read_meta()
     role = current_role()
-    last_iso = meta.get("last_pushed_at") if role == "primary" else meta.get("last_received_at")
-    if not last_iso:
+    candidates = []
+    if role == "primary":
+        candidates = [meta.get("last_pushed_at"), meta.get("last_seen_peer_at")]
+    else:
+        candidates = [meta.get("last_received_at")]
+    timestamps = [c for c in candidates if c]
+    if not timestamps:
         return False
     try:
-        last = datetime.fromisoformat(last_iso)
+        latest = max(datetime.fromisoformat(t) for t in timestamps)
     except Exception:
         return False
-    age = (datetime.now(timezone.utc) - last).total_seconds()
-    return age < 2 * sync_interval_seconds()
+    age = (datetime.now(timezone.utc) - latest).total_seconds()
+    return age < 3 * sync_interval_seconds()
 
 
 def demote_peer() -> tuple[bool, str]:
