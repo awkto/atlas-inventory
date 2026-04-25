@@ -7,14 +7,20 @@ RUN npm run build
 
 FROM python:3.12-slim
 
-ARG LITESTREAM_VERSION=0.5.0
+ARG LITESTREAM_VERSION=0.5.11
 ARG TARGETARCH=amd64
 
 # sqlite3 CLI is used by the backup job for atomic .backup dumps.
 # litestream is the replication transport for HA mode.
+# Litestream asset arch differs from buildx TARGETARCH (amd64 → x86_64).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends sqlite3 ca-certificates curl \
- && curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-${TARGETARCH}.tar.gz" \
+ && case "${TARGETARCH}" in \
+      amd64) LS_ARCH=x86_64 ;; \
+      arm64) LS_ARCH=arm64  ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}"; exit 1 ;; \
+    esac \
+ && curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-${LITESTREAM_VERSION}-linux-${LS_ARCH}.tar.gz" \
     | tar -xz -C /usr/local/bin litestream \
  && apt-get purge -y --auto-remove curl \
  && rm -rf /var/lib/apt/lists/*
