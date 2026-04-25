@@ -23,3 +23,14 @@ HA_STATE_PATH = os.getenv("HA_STATE_PATH", "/data/ha.json")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/data/backups")
 BACKUP_INTERVAL_SECONDS = int(os.getenv("BACKUP_INTERVAL_SECONDS", "900"))
 BACKUP_RETENTION_DAYS = int(os.getenv("BACKUP_RETENTION_DAYS", "14"))
+
+# ---------------------------------------------------------------------------
+# Settings encryption
+# ---------------------------------------------------------------------------
+
+# Key-encryption-key for Fernet-wrapping secrets in the settings table.
+# If unset, a key is auto-generated at first boot and persisted to
+# SETTINGS_KEK_PATH. For HA, set this env var to the same value on both hosts
+# (or copy the KEK file) so secrets replicated via the DB stay decryptable.
+SETTINGS_KEK = os.getenv("SETTINGS_KEK", "")
+SETTINGS_KEK_PATH = os.getenv("SETTINGS_KEK_PATH", "/data/settings-kek")

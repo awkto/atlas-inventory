@@ -17,6 +17,12 @@ services:
       # --- Backups ---
       - BACKUP_INTERVAL_SECONDS=${BACKUP_INTERVAL_SECONDS:-900}
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
+      # --- Settings encryption ---
+      # KEK for Fernet-wrapping secrets in the settings table. Unset →
+      # auto-generated and persisted to /data/settings-kek on first run.
+      # For HA, set this to the same value on both hosts so encrypted
+      # settings replicated via the DB stay decryptable after failover.
+      - SETTINGS_KEK=${SETTINGS_KEK:-}
     volumes:
       - atlas-data:/data
     ports:

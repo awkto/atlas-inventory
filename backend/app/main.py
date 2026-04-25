@@ -6,14 +6,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from app.auth import is_first_run, validate_bearer
+from app.auth import is_first_run, migrate_auth_json_to_settings, validate_bearer
 from app.config import HA_ENABLED, HA_PEER_URL, NOAUTH
 from app.database import Base, engine, SessionLocal
-from app import backup, ha
+from app import backup, ha, settings
 from app.routers import auth, export, items, mcp, networks, search
 from app.routers import ha as ha_router
 
 Base.metadata.create_all(bind=engine)
+settings.ensure_table()
+migrate_auth_json_to_settings()
 
 
 def run_column_migrations():
