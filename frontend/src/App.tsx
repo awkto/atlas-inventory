@@ -16,19 +16,18 @@ import ClusterPage from "./pages/ClusterPage";
 function JoinClusterForm() {
   const [secret, setSecret] = useState("");
   const [baseUrl, setBaseUrl] = useState(window.location.origin);
-  const [sftpHost, setSftpHost] = useState(`${window.location.hostname}:2222`);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const submit = async () => {
     setErr("");
-    if (!secret || !baseUrl || !sftpHost) {
+    if (!secret || !baseUrl) {
       setErr("All fields required.");
       return;
     }
     setBusy(true);
     try {
-      await acceptPairing(secret.trim(), baseUrl.trim(), sftpHost.trim());
+      await acceptPairing(secret.trim(), baseUrl.trim());
       window.location.reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Pairing failed");
@@ -57,14 +56,6 @@ function JoinClusterForm() {
         placeholder="https://host-b:8000"
         className={input}
       />
-      <label className="block text-sm font-medium text-[var(--text-heading)]">This node's SFTP host:port</label>
-      <input
-        type="text"
-        value={sftpHost}
-        onChange={(e) => setSftpHost(e.target.value)}
-        placeholder="host-b:2222"
-        className={input}
-      />
       {err && <p className="text-red-500 text-sm">{err}</p>}
       <button
         onClick={submit}
@@ -74,8 +65,9 @@ function JoinClusterForm() {
         {busy ? "Pairing…" : "Join cluster as standby"}
       </button>
       <p className="text-xs text-[var(--text-muted)]">
-        Pairing exchanges SSH keys with the primary so it can replicate WAL frames into this
-        node's embedded SFTP server. Replica URLs are derived — no manual storage to set up.
+        Pairing shares the HA token + settings KEK with this node. After that, the primary
+        will push DB snapshots over HTTPS to this node every 30s (configurable). On promotion,
+        the latest snapshot becomes this node's live DB.
       </p>
     </div>
   );
@@ -236,7 +228,7 @@ function StandbyScreen({ status, onPromoted }: { status: HAStatus; onPromoted: (
           <div className="flex justify-between"><dt className="text-[var(--text-muted)]">Primary</dt><dd className="font-mono text-right break-all">{status.peer_url}</dd></div>
           <div className="flex justify-between"><dt className="text-[var(--text-muted)]">Peer reachable</dt><dd className={status.peer_reachable ? "text-green-500" : "text-red-500"}>{String(!!status.peer_reachable)}</dd></div>
           <div className="flex justify-between"><dt className="text-[var(--text-muted)]">Peer role</dt><dd className="font-mono">{status.peer_role ?? "—"}</dd></div>
-          <div className="flex justify-between"><dt className="text-[var(--text-muted)]">Litestream</dt><dd className="font-mono">{status.litestream_available ? "ready" : "missing"}</dd></div>
+          <div className="flex justify-between"><dt className="text-[var(--text-muted)]">Last replica received</dt><dd className="font-mono text-right">{status.replica_meta?.last_received_at ?? "never"}</dd></div>
         </dl>
 
         <p className="text-xs text-[var(--text-muted)] mb-4">

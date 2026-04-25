@@ -1,26 +1,31 @@
-"""HA role state, Litestream supervisor, embedded SFTP, peer client.
+"""HA role state + HTTPS-based snapshot replication + peer client.
+
+Replication transport is plain HTTPS: every N seconds the primary takes an
+atomic SQLite .backup, gzips it, and POSTs to the peer's /api/ha/replica-push
+endpoint. The peer stores it as /data/atlas.db.replica. On promotion, the
+standby moves .replica into place and reopens the engine.
+
+No Litestream, no embedded sshd, no key exchange. Two endpoints + a timer.
 
 Configuration precedence:
   settings table  >  env vars  >  defaults
 
-Replica transport is SFTP, served by an `openssh-server` baked into the
-container. Pairing exchanges SSH client pubkeys + sftp_host metadata so
-the operator only enters peer base URL + their own SFTP advertise; replica
-URLs are derived (`sftp://atlas@<peer>/<letter>`).
+Local-only state lives in /data/ha.json (role, self_id, last promoted/demoted
+times). Everything else is in the settings table and replicates with the DB.
 """
 import atexit
 import base64
+import gzip
+import hmac
 import json
 import logging
 import os
 import secrets as _secrets
 import shutil
-import signal
 import subprocess
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 
 import httpx
 
@@ -30,8 +35,6 @@ from app.config import (
     HA_ENABLED,
     HA_INITIAL_ROLE,
     HA_PEER_URL,
-    HA_REPLICA_URL_PEER,
-    HA_REPLICA_URL_SELF,
     HA_SELF_ID,
     HA_STATE_PATH,
     HA_TOKEN,
@@ -42,14 +45,15 @@ logger = logging.getLogger(__name__)
 DB_PATH = DATABASE_URL.replace("sqlite:///", "")
 DATA_DIR = os.path.dirname(DB_PATH) or "/data"
 
-SSH_CLIENT_KEY_PATH = os.path.join(DATA_DIR, "atlas-ssh-key")
-SSH_CLIENT_PUBKEY_PATH = SSH_CLIENT_KEY_PATH + ".pub"
-AUTHORIZED_KEYS_PATH = os.path.join(DATA_DIR, "atlas-authorized_keys")
-LITESTREAM_CONFIG_PATH = os.path.join(DATA_DIR, "litestream.yml")
+REPLICA_DB_PATH = os.path.join(DATA_DIR, "atlas.db.replica")
+REPLICA_META_PATH = os.path.join(DATA_DIR, "replica-meta.json")
+
+DEFAULT_SYNC_INTERVAL_SECONDS = 30
+MAX_SNAPSHOT_BYTES = 500 * 1024 * 1024  # 500 MB upload guard
 
 _state_lock = threading.Lock()
-_litestream_proc: subprocess.Popen | None = None
-_sshd_proc: subprocess.Popen | None = None
+_meta_lock = threading.Lock()
+_scheduler = None
 
 
 # ---------------------------------------------------------------------------
@@ -152,336 +156,235 @@ def node_base_url(letter: str) -> str:
     return ""
 
 
-def node_sftp_host(letter: str) -> str:
-    """Return host:port the peer should SFTP into for this node's replica."""
-    v = settings.get(f"ha.node_{_slot(letter)}.sftp_host")
-    if v:
-        return v
-    base = node_base_url(letter)
-    if not base:
-        return ""
-    parsed = urlparse(base)
-    host = parsed.hostname or ""
-    return f"{host}:2222" if host else ""
-
-
-def self_replica_url() -> str:
-    """Where I push WAL → the PEER's SFTP inbox, into MY letter's directory.
-
-    Each node's embedded SFTP receives the peer's writes into
-    /data/replica-inbound/<peer-letter>/. So when I (letter X) push, I push
-    to sftp://atlas@<peer-sftp-host>/<X>, and that lands inside the peer's
-    /data/replica-inbound/X/.
-    """
-    peer_sftp = node_sftp_host(peer_id())
-    if not peer_sftp:
-        legacy = settings.get(f"ha.node_{_slot(self_id())}.replica_url")
-        if legacy:
-            return legacy
-        return HA_REPLICA_URL_SELF or ""
-    return f"sftp://atlas@{peer_sftp}/{self_id()}"
-
-
-def peer_replica_url() -> str:
-    """Where I restore from on promotion → my LOCAL inbox, where the (now-old)
-    primary was SFTP'ing into me. No remote read needed at promotion time."""
-    legacy = settings.get(f"ha.node_{_slot(peer_id())}.replica_url")
-    if legacy:
-        return legacy
-    return f"file:///srv/replica-inbound/{peer_id()}"
-
-
-def node_replica_url(letter: str) -> str:
-    """For UI display only — show what each node's logical replica destination
-    looks like from its own perspective."""
-    if letter.upper() == self_id():
-        return self_replica_url()
-    if letter.upper() == peer_id():
-        return f"sftp://atlas@{node_sftp_host(self_id())}/{peer_id()}"
-    return ""
-
-
 def peer_base_url() -> str:
     return node_base_url(peer_id())
 
 
-# ---------------------------------------------------------------------------
-# SSH client identity (this node's identity for SFTP'ing to peers)
-# ---------------------------------------------------------------------------
-
-def ensure_ssh_client_key() -> str:
-    """Create an ed25519 keypair on first call. Returns the public key."""
-    if os.path.exists(SSH_CLIENT_KEY_PATH) and os.path.exists(SSH_CLIENT_PUBKEY_PATH):
-        return Path(SSH_CLIENT_PUBKEY_PATH).read_text().strip()
-    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-    Path(SSH_CLIENT_KEY_PATH).unlink(missing_ok=True)
-    Path(SSH_CLIENT_PUBKEY_PATH).unlink(missing_ok=True)
-    cmd = [
-        "ssh-keygen", "-t", "ed25519",
-        "-f", SSH_CLIENT_KEY_PATH,
-        "-N", "",
-        "-C", f"atlas-{self_id()}@{datetime.now(timezone.utc).date().isoformat()}",
-        "-q",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"ssh-keygen failed: {result.stderr}")
-    os.chmod(SSH_CLIENT_KEY_PATH, 0o600)
-    return Path(SSH_CLIENT_PUBKEY_PATH).read_text().strip()
-
-
-def ssh_client_pubkey() -> str:
-    if not os.path.exists(SSH_CLIENT_PUBKEY_PATH):
-        return ensure_ssh_client_key()
-    return Path(SSH_CLIENT_PUBKEY_PATH).read_text().strip()
-
-
-def install_peer_pubkey(pubkey: str) -> bool:
-    """Append a peer's SSH client pubkey to authorized_keys (idempotent)."""
-    if not pubkey or not pubkey.strip():
-        return False
-    pubkey = pubkey.strip()
-    Path(AUTHORIZED_KEYS_PATH).touch(exist_ok=True)
-    existing = Path(AUTHORIZED_KEYS_PATH).read_text() if os.path.exists(AUTHORIZED_KEYS_PATH) else ""
-    # Match on the key body (ignore comment) so the same key under a different
-    # comment is still detected as a duplicate.
-    key_body = " ".join(pubkey.split()[:2])
-    for line in existing.splitlines():
-        if line.startswith("#") or not line.strip():
-            continue
-        if " ".join(line.split()[:2]) == key_body:
-            return False
-    with open(AUTHORIZED_KEYS_PATH, "a") as f:
-        if existing and not existing.endswith("\n"):
-            f.write("\n")
-        f.write(pubkey + "\n")
-    try:
-        os.chmod(AUTHORIZED_KEYS_PATH, 0o600)
-    except OSError:
-        pass
-    return True
-
-
-# ---------------------------------------------------------------------------
-# sshd supervisor (embedded SFTP server)
-# ---------------------------------------------------------------------------
-
-def sshd_available() -> bool:
-    return shutil.which("sshd") is not None or os.path.exists("/usr/sbin/sshd")
-
-
-def sshd_pid() -> int | None:
-    if _sshd_proc and _sshd_proc.poll() is None:
-        return _sshd_proc.pid
-    return None
-
-
-def start_sshd() -> tuple[bool, str]:
-    global _sshd_proc
-    stop_sshd()
-
-    if not sshd_available():
-        return False, "sshd binary not installed"
-    cfg = "/etc/ssh/sshd_atlas.conf"
-    if not os.path.exists(cfg):
-        return False, f"sshd config not found at {cfg}"
-
-    cmd = ["/usr/sbin/sshd", "-D", "-e", "-f", cfg]
-    logger.info("starting sshd (atlas SFTP) -f %s", cfg)
-    try:
-        _sshd_proc = subprocess.Popen(cmd)
-    except Exception as e:
-        return False, f"sshd spawn failed: {e}"
-    return True, f"pid {_sshd_proc.pid}"
-
-
-def stop_sshd() -> None:
-    global _sshd_proc
-    if _sshd_proc is None:
-        return
-    proc = _sshd_proc
-    _sshd_proc = None
-    if proc.poll() is not None:
-        return
-    try:
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=5)
-    except Exception:
+def sync_interval_seconds() -> int:
+    v = settings.get("ha.sync_interval_seconds")
+    if v:
         try:
-            proc.kill()
-        except Exception:
+            return max(5, int(v))
+        except ValueError:
             pass
+    return DEFAULT_SYNC_INTERVAL_SECONDS
 
 
 # ---------------------------------------------------------------------------
-# Litestream supervisor — uses YAML config for SFTP key-path
+# Replica metadata
 # ---------------------------------------------------------------------------
 
-def litestream_available() -> bool:
-    return shutil.which("litestream") is not None
+def _read_meta() -> dict:
+    with _meta_lock:
+        p = Path(REPLICA_META_PATH)
+        if not p.exists():
+            return {}
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            return {}
 
 
-def litestream_pid() -> int | None:
-    if _litestream_proc and _litestream_proc.poll() is None:
-        return _litestream_proc.pid
-    return None
+def _write_meta(updates: dict) -> None:
+    with _meta_lock:
+        p = Path(REPLICA_META_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        existing = {}
+        if p.exists():
+            try:
+                existing = json.loads(p.read_text())
+            except Exception:
+                pass
+        existing.update(updates)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(existing, indent=2))
+        tmp.replace(p)
 
 
-def _build_litestream_config() -> str | None:
-    """Render YAML config for the current peer set. Returns None if HA not ready."""
-    url = self_replica_url()
-    if not url:
-        return None
-
-    # Parse SFTP URL: sftp://USER@HOST:PORT/PATH
-    if url.startswith("sftp://"):
-        rest = url[7:]
-        userhost, _, path = rest.partition("/")
-        user, _, hostport = userhost.partition("@")
-        host, _, port_s = hostport.partition(":")
-        port = int(port_s) if port_s else 22
-        replica_block = (
-            "      - type: sftp\n"
-            f"        host: {host}\n"
-            f"        port: {port}\n"
-            f"        user: {user or 'atlas'}\n"
-            f"        key-path: {SSH_CLIENT_KEY_PATH}\n"
-            f"        path: /{path}\n"
-        )
-    elif url.startswith(("s3://", "gs://", "abs://", "file://")):
-        replica_block = f"      - url: {url}\n"
-    else:
-        return None
-
-    return (
-        "dbs:\n"
-        f"  - path: {DB_PATH}\n"
-        "    replicas:\n"
-        f"{replica_block}"
-    )
+def replica_meta() -> dict:
+    return _read_meta()
 
 
-def start_replicate() -> tuple[bool, str]:
-    global _litestream_proc
-    stop_replicate()
+# ---------------------------------------------------------------------------
+# Snapshot generation (primary side)
+# ---------------------------------------------------------------------------
 
-    if not ha_enabled():
-        return False, "HA disabled"
-    if not litestream_available():
-        return False, "litestream binary not installed"
+def _read_data_version() -> int | None:
     if not os.path.exists(DB_PATH):
-        return False, f"db not found at {DB_PATH}"
-
-    cfg = _build_litestream_config()
-    if not cfg:
-        return False, "self replica URL not configured"
-
-    Path(LITESTREAM_CONFIG_PATH).write_text(cfg)
-    cmd = ["litestream", "replicate", "-config", LITESTREAM_CONFIG_PATH]
-    logger.info("starting litestream replicate -config %s", LITESTREAM_CONFIG_PATH)
+        return None
     try:
-        _litestream_proc = subprocess.Popen(cmd)
+        import sqlite3
+        with sqlite3.connect(DB_PATH) as con:
+            return con.execute("PRAGMA data_version").fetchone()[0]
     except Exception as e:
-        return False, f"spawn failed: {e}"
-    return True, f"pid {_litestream_proc.pid}"
+        logger.debug("data_version read failed: %s", e)
+        return None
 
 
-def stop_replicate() -> None:
-    global _litestream_proc
-    if _litestream_proc is None:
-        return
-    proc = _litestream_proc
-    _litestream_proc = None
-    if proc.poll() is not None:
-        return
+def _build_snapshot() -> tuple[bytes, int] | None:
+    """Take an atomic .backup of the live DB and return (gzipped_bytes, raw_size)."""
+    snap_path = "/tmp/atlas-replica-snap.db"
+    Path(snap_path).unlink(missing_ok=True)
     try:
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=10)
-    except Exception:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-
-
-def run_restore(replica_url: str) -> tuple[bool, str]:
-    if not replica_url:
-        return False, "replica URL not set"
-    if not litestream_available():
-        return False, "litestream binary not installed"
-
-    tmp = DB_PATH + ".restore"
-    Path(tmp).unlink(missing_ok=True)
-
-    if replica_url.startswith("sftp://"):
-        # Build a YAML config restore-source — easier than the URL form for SFTP.
-        rest = replica_url[7:]
-        userhost, _, path = rest.partition("/")
-        user, _, hostport = userhost.partition("@")
-        host, _, port_s = hostport.partition(":")
-        port = int(port_s) if port_s else 22
-        cfg = (
-            "dbs:\n"
-            f"  - path: {DB_PATH}\n"
-            "    replicas:\n"
-            "      - type: sftp\n"
-            f"        host: {host}\n"
-            f"        port: {port}\n"
-            f"        user: {user or 'atlas'}\n"
-            f"        key-path: {SSH_CLIENT_KEY_PATH}\n"
-            f"        path: /{path}\n"
+        result = subprocess.run(
+            ["sqlite3", DB_PATH, f".backup {snap_path}"],
+            capture_output=True, text=True, timeout=120,
         )
-        cfg_path = LITESTREAM_CONFIG_PATH + ".restore"
-        Path(cfg_path).write_text(cfg)
-        cmd = ["litestream", "restore", "-config", cfg_path, "-o", tmp, DB_PATH]
-    else:
-        cmd = ["litestream", "restore", "-o", tmp, replica_url]
-
-    logger.info("restoring from replica (peer)")
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    except Exception as e:
-        return False, f"restore exec failed: {e}"
-    if result.returncode != 0:
-        Path(tmp).unlink(missing_ok=True)
-        return False, f"restore failed: {result.stderr.strip() or result.stdout.strip()}"
-
-    os.replace(tmp, DB_PATH)
-    for suffix in ("-wal", "-shm"):
-        Path(DB_PATH + suffix).unlink(missing_ok=True)
-    settings.invalidate()
-    return True, "restored"
+        if result.returncode != 0:
+            logger.warning("snapshot .backup failed: %s", result.stderr.strip())
+            return None
+        raw = Path(snap_path).read_bytes()
+        compressed = gzip.compress(raw, compresslevel=6)
+        return compressed, len(raw)
+    finally:
+        Path(snap_path).unlink(missing_ok=True)
 
 
-atexit.register(stop_replicate)
-atexit.register(stop_sshd)
-
-
-# ---------------------------------------------------------------------------
-# Dynamic reconfigure
-# ---------------------------------------------------------------------------
-
-def reconfigure(changed_key: str = "") -> None:
-    logger.info("ha.reconfigure (%s)", changed_key or "startup")
-
-    # Start sshd unconditionally if the binary is available — pairing needs
-    # the SFTP endpoint reachable BEFORE HA gets toggled on. The cost of an
-    # idle sshd is trivial; the cost of a chicken-and-egg pairing failure is
-    # not.
-    if sshd_available() and sshd_pid() is None:
-        ok, msg = start_sshd()
-        logger.info("sshd: ok=%s msg=%s", ok, msg)
-
+def push_snapshot_to_peer(force: bool = False) -> dict:
     if not ha_enabled():
-        stop_replicate()
-        return
+        return {"ok": False, "reason": "HA disabled"}
+    if current_role() != "primary":
+        return {"ok": False, "reason": "not primary"}
+    base = peer_base_url()
+    if not base:
+        return {"ok": False, "reason": "peer base URL not set"}
+    token = ha_token()
+    if not token:
+        return {"ok": False, "reason": "ha.token not set"}
 
-    role = load_state().get("role", "primary")
-    if role == "primary":
-        ok, msg = start_replicate()
-        logger.info("reconfigure → replicate: ok=%s msg=%s", ok, msg)
+    version = _read_data_version()
+    if version is None:
+        return {"ok": False, "reason": "db unavailable"}
+
+    last_pushed = _read_meta().get("last_pushed_data_version")
+    if not force and last_pushed is not None and version == last_pushed:
+        return {"ok": True, "skipped": True, "reason": "no changes since last push", "data_version": version}
+
+    snap = _build_snapshot()
+    if snap is None:
+        return {"ok": False, "reason": "snapshot build failed"}
+    compressed, raw_size = snap
+
+    try:
+        r = httpx.post(
+            f"{base.rstrip('/')}/api/ha/replica-push",
+            content=compressed,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/octet-stream",
+                "X-HA-Sender-Id": self_id(),
+                "X-HA-Data-Version": str(version),
+            },
+            timeout=300.0,
+            verify=False,
+        )
+    except Exception as e:
+        return {"ok": False, "reason": f"peer unreachable: {e}"}
+
+    if r.status_code != 200:
+        return {"ok": False, "reason": f"peer returned {r.status_code}: {r.text[:200]}"}
+
+    _write_meta({
+        "last_pushed_data_version": version,
+        "last_pushed_at": now_iso(),
+        "last_pushed_size_bytes": len(compressed),
+        "last_pushed_raw_bytes": raw_size,
+    })
+    return {
+        "ok": True,
+        "skipped": False,
+        "data_version": version,
+        "size_bytes": len(compressed),
+        "raw_bytes": raw_size,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Snapshot reception (standby side)
+# ---------------------------------------------------------------------------
+
+def receive_replica(compressed_data: bytes, sender_id: str, data_version: str) -> dict:
+    if current_role() == "primary":
+        return {"ok": False, "reason": "this node is primary; refusing to overwrite live DB"}
+    if len(compressed_data) > MAX_SNAPSHOT_BYTES:
+        return {"ok": False, "reason": f"snapshot too large ({len(compressed_data)} bytes)"}
+
+    tmp_path = REPLICA_DB_PATH + ".incoming"
+    Path(tmp_path).unlink(missing_ok=True)
+    try:
+        decompressed = gzip.decompress(compressed_data)
+    except Exception as e:
+        return {"ok": False, "reason": f"gzip decode failed: {e}"}
+
+    try:
+        Path(tmp_path).write_bytes(decompressed)
+        os.replace(tmp_path, REPLICA_DB_PATH)
+    except Exception as e:
+        Path(tmp_path).unlink(missing_ok=True)
+        return {"ok": False, "reason": f"write failed: {e}"}
+
+    _write_meta({
+        "last_received_data_version": data_version,
+        "last_received_at": now_iso(),
+        "last_received_size_bytes": len(compressed_data),
+        "last_received_raw_bytes": len(decompressed),
+        "sender_id": sender_id,
+    })
+    return {"ok": True, "raw_bytes": len(decompressed), "data_version": data_version}
+
+
+# ---------------------------------------------------------------------------
+# Promotion (standby → primary)
+# ---------------------------------------------------------------------------
+
+def promote_to_primary() -> dict:
+    """Move the replica DB into place, drop the engine pool, become primary."""
+    if not Path(REPLICA_DB_PATH).exists():
+        # Nothing to restore from — promote anyway with whatever local DB exists.
+        # This covers the very-first-pair case where the standby was never sent
+        # any snapshot before failover (degenerate).
+        logger.warning("no replica DB found; promoting with local DB as-is")
     else:
-        stop_replicate()
+        from app.database import engine
+        engine.dispose()
+        os.replace(REPLICA_DB_PATH, DB_PATH)
+        for suffix in ("-wal", "-shm"):
+            Path(DB_PATH + suffix).unlink(missing_ok=True)
+        settings.invalidate()
+
+    update_state(role="primary", last_promoted_at=now_iso())
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Sync scheduler
+# ---------------------------------------------------------------------------
+
+def start_sync_scheduler() -> None:
+    global _scheduler
+    if _scheduler is not None:
+        return
+    from apscheduler.schedulers.background import BackgroundScheduler
+    _scheduler = BackgroundScheduler(daemon=True)
+    interval = sync_interval_seconds()
+    _scheduler.add_job(_sync_tick, "interval", seconds=interval, id="ha_sync")
+    _scheduler.start()
+    logger.info("HA sync scheduler started (every %ds)", interval)
+
+
+def _sync_tick() -> None:
+    if not ha_enabled() or current_role() != "primary":
+        return
+    if not peer_base_url() or not ha_token():
+        return
+    result = push_snapshot_to_peer()
+    if result.get("ok") and not result.get("skipped"):
+        logger.info(
+            "ha sync: pushed %d bytes (raw=%d, data_version=%s)",
+            result.get("size_bytes", 0), result.get("raw_bytes", 0), result.get("data_version"),
+        )
+    elif not result.get("ok"):
+        logger.warning("ha sync failed: %s", result.get("reason"))
 
 
 # ---------------------------------------------------------------------------
@@ -504,16 +407,15 @@ def peer_status() -> dict | None:
 def demote_peer() -> tuple[bool, str]:
     base = peer_base_url()
     if not base:
-        return False, "peer base URL not configured"
+        return False, "peer base URL not set"
     token = ha_token()
     if not token:
-        return False, "ha.token not configured"
+        return False, "ha.token not set"
     try:
         r = httpx.post(
             f"{base.rstrip('/')}/api/ha/demote",
             headers={"Authorization": f"Bearer {token}"},
-            timeout=10.0,
-            verify=False,
+            timeout=10.0, verify=False,
         )
         if r.status_code == 200:
             return True, "peer demoted"
@@ -522,42 +424,31 @@ def demote_peer() -> tuple[bool, str]:
         return False, f"peer unreachable: {e}"
 
 
-def call_peer_register(my_id: str, my_base_url: str, my_sftp_host: str, my_pubkey: str) -> tuple[bool, str]:
+def call_peer_register(my_id: str, my_base_url: str) -> tuple[bool, str]:
     base = peer_base_url()
-    if not base:
-        return False, "peer base URL not configured"
     token = ha_token()
-    if not token:
-        return False, "ha.token not configured"
+    if not base or not token:
+        return False, "peer not configured"
     try:
         r = httpx.post(
             f"{base.rstrip('/')}/api/ha/register-peer",
             headers={"Authorization": f"Bearer {token}"},
-            json={
-                "id": my_id,
-                "base_url": my_base_url,
-                "sftp_host": my_sftp_host,
-                "ssh_pubkey": my_pubkey,
-            },
-            timeout=10.0,
-            verify=False,
+            json={"id": my_id, "base_url": my_base_url},
+            timeout=10.0, verify=False,
         )
         if r.status_code == 200:
-            return True, "peer registered us"
-        return False, f"peer returned {r.status_code}: {r.text[:300]}"
+            return True, "registered"
+        return False, f"{r.status_code}: {r.text[:200]}"
     except Exception as e:
-        return False, f"peer unreachable: {e}"
+        return False, str(e)
 
 
 # ---------------------------------------------------------------------------
-# Pairing — exchange config + SSH client pubkeys
+# Pairing v3 — minimal: base URL + token + KEK
 # ---------------------------------------------------------------------------
 
-def generate_pairing_secret(my_base_url: str = "", my_sftp_host: str = "") -> dict:
-    """Build a pairing bundle on the primary."""
-    # Generating a pairing means we ARE a cluster of (currently) one.
-    # Flip ha.enabled now so Litestream is ready to start the moment the
-    # peer registers — operator doesn't have to toggle it separately.
+def generate_pairing_secret(my_base_url: str = "") -> dict:
+    """Build a pairing bundle on the primary (auto-enables HA)."""
     settings.set("ha.enabled", "true")
 
     token = ha_token()
@@ -566,87 +457,50 @@ def generate_pairing_secret(my_base_url: str = "", my_sftp_host: str = "") -> di
         settings.set("ha.token", token, encrypted=True)
 
     me = self_id()
-    pubkey = ensure_ssh_client_key()
-
-    # Use provided values or settings; never invent a wrong default here.
     base_url = my_base_url or node_base_url(me)
-    sftp_host = my_sftp_host or node_sftp_host(me)
-
-    # Persist self info so subsequent pairings are consistent
     if base_url:
         settings.set(f"ha.node_{_slot(me)}.base_url", base_url)
-    if sftp_host:
-        settings.set(f"ha.node_{_slot(me)}.sftp_host", sftp_host)
 
+    from app.settings import _resolve_kek
     payload = {
-        "v": 2,
+        "v": 3,
         "primary_self_id": me,
         "primary_base_url": base_url,
-        "primary_sftp_host": sftp_host,
-        "primary_ssh_pubkey": pubkey,
         "ha_token": token,
+        "kek": base64.urlsafe_b64encode(_resolve_kek()).decode(),
     }
-    # Include the KEK so encrypted settings replicated via the DB stay
-    # decryptable on the standby.
-    from app.settings import _resolve_kek
-    payload["kek"] = base64.urlsafe_b64encode(_resolve_kek()).decode()
-
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     return {"pairing_secret": encoded}
 
 
-def accept_pairing_secret(encoded: str, my_base_url: str, my_sftp_host: str) -> dict:
-    """Run on a fresh standby."""
+def accept_pairing_secret(encoded: str, my_base_url: str) -> dict:
+    """Run on a fresh standby — installs KEK, settings, peers up, flips role."""
     try:
         decoded = json.loads(base64.urlsafe_b64decode(encoded.encode()).decode())
     except Exception as e:
         return {"ok": False, "reason": f"invalid pairing secret: {e}"}
 
-    if decoded.get("v") != 2:
-        return {"ok": False, "reason": "pairing version mismatch (need v2)"}
+    if decoded.get("v") != 3:
+        return {"ok": False, "reason": "pairing version mismatch (need v3)"}
 
     primary_id = (decoded.get("primary_self_id") or "").upper()
     if primary_id not in ("A", "B"):
         return {"ok": False, "reason": "missing primary_self_id"}
-
     my_id = "B" if primary_id == "A" else "A"
 
-    # Re-encrypt currently-encrypted rows with the incoming KEK so existing
-    # settings (e.g. local API token from first-run) stay decryptable.
     kek_b64 = decoded.get("kek")
     if kek_b64:
         new_kek = base64.urlsafe_b64decode(kek_b64.encode())
         _swap_kek(new_kek)
 
-    primary_pubkey = decoded.get("primary_ssh_pubkey", "")
-    if primary_pubkey:
-        install_peer_pubkey(primary_pubkey)
-
-    # Generate own SSH client identity
-    my_pubkey = ensure_ssh_client_key()
-
-    # Persist primary's coords + token
     settings.set(f"ha.node_{_slot(primary_id)}.base_url", decoded.get("primary_base_url", ""))
-    settings.set(f"ha.node_{_slot(primary_id)}.sftp_host", decoded.get("primary_sftp_host", ""))
-    settings.set(f"ha.node_{_slot(primary_id)}.ssh_pubkey", primary_pubkey)
     settings.set("ha.token", decoded["ha_token"], encrypted=True)
-
-    # Persist this node's coords
     settings.set(f"ha.node_{_slot(my_id)}.base_url", my_base_url)
-    settings.set(f"ha.node_{_slot(my_id)}.sftp_host", my_sftp_host)
-    settings.set(f"ha.node_{_slot(my_id)}.ssh_pubkey", my_pubkey)
 
-    # Local role state
     update_state(self_id=my_id, role="standby")
-
-    # Enable HA — won't spawn Litestream because role=standby, but will start sshd
     settings.set("ha.enabled", "true")
 
-    # Tell the primary about us so it can install our pubkey + know how to
-    # SFTP into our replica slot.
-    registered, register_msg = call_peer_register(
-        my_id, my_base_url, my_sftp_host, my_pubkey
-    )
+    registered, register_msg = call_peer_register(my_id, my_base_url)
 
     peer = peer_status()
     return {
@@ -659,26 +513,19 @@ def accept_pairing_secret(encoded: str, my_base_url: str, my_sftp_host: str) -> 
     }
 
 
-def register_incoming_peer(peer_id_letter: str, base_url: str, sftp_host: str, ssh_pubkey: str) -> dict:
-    """Called by the standby on the primary as the second leg of pairing."""
+def register_incoming_peer(peer_id_letter: str, base_url: str) -> dict:
     pid = peer_id_letter.upper()
     if pid not in ("A", "B"):
         return {"ok": False, "reason": "invalid peer id"}
     if pid == self_id():
         return {"ok": False, "reason": "peer claims our self_id"}
-
-    if ssh_pubkey:
-        install_peer_pubkey(ssh_pubkey)
     settings.set(f"ha.node_{_slot(pid)}.base_url", base_url)
-    settings.set(f"ha.node_{_slot(pid)}.sftp_host", sftp_host)
-    settings.set(f"ha.node_{_slot(pid)}.ssh_pubkey", ssh_pubkey)
-    # Belt-and-suspenders: by now the cluster is definitely paired.
     settings.set("ha.enabled", "true")
     return {"ok": True}
 
 
 def _swap_kek(new_kek: bytes) -> None:
-    """Re-encrypt all existing encrypted rows with the new KEK, then install it."""
+    """Re-encrypt all encrypted rows with new KEK, then install it."""
     from app.config import SETTINGS_KEK_PATH
     from cryptography.fernet import Fernet, InvalidToken
     from sqlalchemy import text
@@ -696,7 +543,7 @@ def _swap_kek(new_kek: bytes) -> None:
             try:
                 plain = old_fernet.decrypt(encrypted_value.encode()).decode()
             except InvalidToken:
-                logger.warning("could not decrypt %s during KEK swap; leaving stale", key)
+                logger.warning("could not decrypt %s during KEK swap; skipping", key)
                 continue
             re_encrypted.append((key, new_fernet.encrypt(plain.encode()).decode()))
         for key, new_value in re_encrypted:
@@ -708,7 +555,6 @@ def _swap_kek(new_kek: bytes) -> None:
     finally:
         db.close()
 
-    # Install new KEK on disk
     Path(SETTINGS_KEK_PATH).parent.mkdir(parents=True, exist_ok=True)
     Path(SETTINGS_KEK_PATH).write_bytes(new_kek)
     try:
@@ -716,27 +562,36 @@ def _swap_kek(new_kek: bytes) -> None:
     except OSError:
         pass
 
-    # Force settings module to re-init Fernet on next use
     _s._fernet = None
     settings.invalidate()
 
 
 # ---------------------------------------------------------------------------
-# Startup
+# Lifecycle
 # ---------------------------------------------------------------------------
+
+def reconfigure(changed_key: str = "") -> None:
+    """Settings change handler — currently a no-op (sync timer reads live)."""
+    logger.info("ha.reconfigure (%s)", changed_key or "startup")
+
 
 def on_startup() -> None:
     settings.on_change("ha.", reconfigure)
+    start_sync_scheduler()
+    if ha_enabled():
+        logger.info("HA enabled; self_id=%s role=%s", self_id(), current_role())
+    else:
+        logger.info("HA disabled")
 
-    # Generate the SSH identity eagerly so the pubkey is available the moment
-    # an operator clicks "Generate pairing" — no first-call latency.
-    try:
-        ensure_ssh_client_key()
-    except Exception as e:
-        logger.warning("could not generate SSH client key: %s", e)
 
-    # Always start sshd if available (see reconfigure() for the why).
-    state = load_state()
-    role = state.get("role", "primary")
-    logger.info("HA self_id=%s role=%s enabled=%s", self_id(), role, ha_enabled())
-    reconfigure("startup")
+def shutdown() -> None:
+    global _scheduler
+    if _scheduler is not None:
+        try:
+            _scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        _scheduler = None
+
+
+atexit.register(shutdown)

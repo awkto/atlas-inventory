@@ -6,12 +6,11 @@ services:
       - NOAUTH=${NOAUTH:-}
       - MCP_ENABLED=${MCP_ENABLED:-true}
       # --- HA (optional) ---
-      # See docker-compose.ha.yml.example for a two-host setup.
+      # Pair the two nodes from the Cluster page in the UI; no env vars
+      # required for normal operation.
       - HA_ENABLED=${HA_ENABLED:-}
       - HA_SELF_ID=${HA_SELF_ID:-A}
       - HA_INITIAL_ROLE=${HA_INITIAL_ROLE:-primary}
-      - HA_REPLICA_URL_SELF=${HA_REPLICA_URL_SELF:-}
-      - HA_REPLICA_URL_PEER=${HA_REPLICA_URL_PEER:-}
       - HA_PEER_URL=${HA_PEER_URL:-}
       - HA_TOKEN=${HA_TOKEN:-}
       # --- Backups ---
@@ -20,21 +19,13 @@ services:
       # --- Settings encryption ---
       # KEK for Fernet-wrapping secrets in the settings table. Unset →
       # auto-generated and persisted to /data/settings-kek on first run.
-      # For HA, set this to the same value on both hosts so encrypted
-      # settings replicated via the DB stay decryptable after failover.
+      # Pairing automatically syncs the KEK to the peer; you only need to
+      # set this manually if you're restoring without going through pairing.
       - SETTINGS_KEK=${SETTINGS_KEK:-}
     volumes:
       - atlas-data:/data
-      # Docker-managed named volume for the SFTP inbound. Has to be a path
-      # whose ancestors are all root-owned (sshd's chroot enforcement) — a
-      # bind mount from a non-root user dir won't pass that check.
-      - atlas-replica-inbound:/srv/replica-inbound
     ports:
       - "8000:8000"
-      # SFTP endpoint for HA replication. Map to whatever host port you want
-      # the peer to reach this container on; pass the same host:port as
-      # "this node's SFTP host" during pairing.
-      - "2222:22"
 
   frontend:
     build: ./frontend
@@ -45,4 +36,3 @@ services:
 
 volumes:
   atlas-data:
-  atlas-replica-inbound:

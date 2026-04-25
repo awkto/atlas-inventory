@@ -146,13 +146,22 @@ export interface HAStatus {
   enabled: boolean;
   role: "primary" | "standby";
   self_id?: string;
+  peer_id?: string;
   peer_url?: string;
   peer_reachable?: boolean;
   peer_role?: "primary" | "standby" | null;
   last_promoted_at?: string | null;
   last_demoted_at?: string | null;
-  litestream_pid?: number | null;
-  litestream_available?: boolean;
+  sync_interval_seconds?: number;
+  replica_meta?: {
+    last_pushed_at?: string;
+    last_pushed_data_version?: number;
+    last_pushed_size_bytes?: number;
+    last_received_at?: string;
+    last_received_data_version?: string;
+    last_received_size_bytes?: number;
+    sender_id?: string;
+  };
   last_backup?: { name: string; size_bytes: number; mtime: string } | null;
   data_version?: number | null;
 }
@@ -191,9 +200,9 @@ export interface HAConfig {
   self_id: string;
   peer_id: string;
   token_set: boolean;
-  ssh_pubkey: string;
-  node_a: { base_url: string; sftp_host: string; replica_url: string };
-  node_b: { base_url: string; sftp_host: string; replica_url: string };
+  sync_interval_seconds: number;
+  node_a: { base_url: string };
+  node_b: { base_url: string };
 }
 
 export const getHAConfig = () => request<HAConfig>("/api/ha/config");
@@ -201,30 +210,25 @@ export const getHAConfig = () => request<HAConfig>("/api/ha/config");
 export const updateHAConfig = (patch: {
   enabled?: boolean;
   node_a_base_url?: string;
-  node_a_sftp_host?: string;
   node_b_base_url?: string;
-  node_b_sftp_host?: string;
+  sync_interval_seconds?: number;
 }) =>
   request<{ ok: boolean; changed: string[] }>("/api/ha/config", {
     method: "PUT",
     body: JSON.stringify(patch),
   });
 
-export const generatePairing = (my_base_url?: string, my_sftp_host?: string) =>
+export const generatePairing = (my_base_url?: string) =>
   request<{ pairing_secret: string }>("/api/ha/generate-pairing", {
     method: "POST",
-    body: JSON.stringify({ my_base_url, my_sftp_host }),
+    body: JSON.stringify({ my_base_url }),
   });
 
-export const acceptPairing = async (
-  pairing_secret: string,
-  my_base_url: string,
-  my_sftp_host: string,
-) => {
+export const acceptPairing = async (pairing_secret: string, my_base_url: string) => {
   const res = await fetch("/api/ha/accept-pairing", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pairing_secret, my_base_url, my_sftp_host }),
+    body: JSON.stringify({ pairing_secret, my_base_url }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail || res.statusText);
@@ -237,6 +241,12 @@ export const acceptPairing = async (
     peer_role: string | null;
   };
 };
+
+export const syncNow = () =>
+  request<{ ok: boolean; skipped?: boolean; size_bytes?: number; data_version?: number; reason?: string }>(
+    "/api/ha/sync-now",
+    { method: "POST" },
+  );
 
 export const demoteSelf = async () => {
   const res = await fetch("/api/ha/demote", {

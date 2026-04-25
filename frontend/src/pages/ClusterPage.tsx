@@ -7,6 +7,7 @@ import {
   triggerBackup,
   listBackups,
   demoteSelf,
+  syncNow,
   type HAStatus,
   type HAConfig,
 } from "../api";
@@ -26,21 +27,6 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function PortMappingBanner() {
-  return (
-    <div className="bg-[var(--bg-card)] border border-amber-500/40 rounded-lg p-4 mb-6 text-xs text-[var(--text-heading)]">
-      <p className="font-bold mb-1">Before pairing — map the SFTP port</p>
-      <p className="text-[var(--text-muted)] leading-relaxed">
-        HA replication uses an embedded SFTP server on the container's port 22. Make sure your
-        compose file maps it to a host port (default <code className="font-mono">2222:22</code>) on
-        both nodes, and that the peer can reach <code className="font-mono">{`<this-host>:2222`}</code>.
-        Watchtower won't add new port mappings on its own — you have to{" "}
-        <code className="font-mono">docker compose down &amp;&amp; up -d</code> after editing.
-      </p>
-    </div>
-  );
-}
-
 function StatusCard({ status }: { status: HAStatus }) {
   if (!status.enabled) {
     return (
@@ -51,18 +37,24 @@ function StatusCard({ status }: { status: HAStatus }) {
         </p>
         <ul className="text-xs text-[var(--text-muted)] list-disc ml-5 mt-2 space-y-1">
           <li>
-            This node is the <strong>primary</strong> — scroll down to <em>Pair a standby</em>,
-            generate a secret, and paste it into the standby's setup screen.
+            This is the <strong>primary</strong> — scroll to <em>Pair a standby</em>, generate a
+            secret, paste it into the standby's setup screen.
           </li>
           <li>
-            This node is the <strong>standby</strong> — that's done from this node's first-run
-            setup screen by selecting "Join existing cluster". Already past that point? Sign out
-            and the standby flow appears next time.
+            This is the <strong>standby</strong> — that's done from this node's first-run setup
+            screen by selecting "Join existing cluster".
           </li>
         </ul>
       </div>
     );
   }
+
+  const meta = status.replica_meta || {};
+  const isPrimary = status.role === "primary";
+  const lastSync = isPrimary ? meta.last_pushed_at : meta.last_received_at;
+  const lastSize = isPrimary ? meta.last_pushed_size_bytes : meta.last_received_size_bytes;
+  const lastVersion = isPrimary ? meta.last_pushed_data_version : meta.last_received_data_version;
+
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 mb-6">
       <h2 className="text-sm font-bold text-[var(--text-heading)] mb-3">Status</h2>
@@ -70,7 +62,7 @@ function StatusCard({ status }: { status: HAStatus }) {
         <Row
           label="Role"
           value={
-            <span className={status.role === "primary" ? "text-green-500" : "text-amber-500"}>
+            <span className={isPrimary ? "text-green-500" : "text-amber-500"}>
               {status.role}
             </span>
           }
@@ -82,15 +74,10 @@ function StatusCard({ status }: { status: HAStatus }) {
             status.peer_reachable ? status.peer_role ?? "unknown" : "unreachable"
           }`}
         />
+        <Row label="Sync interval" value={`${status.sync_interval_seconds ?? "—"} s`} />
         <Row
-          label="Litestream"
-          value={
-            status.litestream_pid
-              ? `running (pid ${status.litestream_pid})`
-              : status.litestream_available
-              ? "idle"
-              : "binary missing"
-          }
+          label={isPrimary ? "Last pushed" : "Last received"}
+          value={lastSync ? `${lastSync} · ${lastSize ? formatBytes(lastSize) : "?"} · v${lastVersion ?? "?"}` : "never"}
         />
         <Row label="Last promoted" value={status.last_promoted_at ?? "never"} />
         <Row label="Last demoted" value={status.last_demoted_at ?? "never"} />
@@ -100,17 +87,10 @@ function StatusCard({ status }: { status: HAStatus }) {
   );
 }
 
-function ConfigEditor({
-  config,
-  onSaved,
-}: {
-  config: HAConfig;
-  onSaved: () => void;
-}) {
+function ConfigEditor({ config, onSaved }: { config: HAConfig; onSaved: () => void }) {
   const [nodeA_base, setNodeA_base] = useState(config.node_a.base_url);
-  const [nodeA_sftp, setNodeA_sftp] = useState(config.node_a.sftp_host);
   const [nodeB_base, setNodeB_base] = useState(config.node_b.base_url);
-  const [nodeB_sftp, setNodeB_sftp] = useState(config.node_b.sftp_host);
+  const [interval, setInterval_] = useState(config.sync_interval_seconds);
   const [enabled, setEnabled] = useState(config.enabled);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -122,11 +102,10 @@ function ConfigEditor({
       await updateHAConfig({
         enabled,
         node_a_base_url: nodeA_base,
-        node_a_sftp_host: nodeA_sftp,
         node_b_base_url: nodeB_base,
-        node_b_sftp_host: nodeB_sftp,
+        sync_interval_seconds: interval,
       });
-      setMsg("Saved. Litestream reconfigured if applicable.");
+      setMsg("Saved.");
       onSaved();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Save failed");
@@ -157,19 +136,8 @@ function ConfigEditor({
             value={nodeA_base}
             onChange={(e) => setNodeA_base(e.target.value)}
             placeholder="https://host-a:8000"
-            className={input + " mb-2"}
+            className={input}
           />
-          <label className="block text-xs text-[var(--text-muted)] mb-1">SFTP host:port</label>
-          <input
-            type="text"
-            value={nodeA_sftp}
-            onChange={(e) => setNodeA_sftp(e.target.value)}
-            placeholder="host-a:2222"
-            className={input + " mb-1"}
-          />
-          <p className="text-[10px] text-[var(--text-muted)] mt-1">
-            Replica → <span className="font-mono">{config.node_a.replica_url || "(unset)"}</span>
-          </p>
         </div>
         <div>
           <h3 className="text-xs font-bold text-[var(--text-heading)] mb-2">
@@ -181,20 +149,20 @@ function ConfigEditor({
             value={nodeB_base}
             onChange={(e) => setNodeB_base(e.target.value)}
             placeholder="https://host-b:8000"
-            className={input + " mb-2"}
+            className={input}
           />
-          <label className="block text-xs text-[var(--text-muted)] mb-1">SFTP host:port</label>
-          <input
-            type="text"
-            value={nodeB_sftp}
-            onChange={(e) => setNodeB_sftp(e.target.value)}
-            placeholder="host-b:2222"
-            className={input + " mb-1"}
-          />
-          <p className="text-[10px] text-[var(--text-muted)] mt-1">
-            Replica → <span className="font-mono">{config.node_b.replica_url || "(unset)"}</span>
-          </p>
         </div>
+      </div>
+
+      <div className="mb-4">
+        <label className="block text-xs text-[var(--text-muted)] mb-1">Sync interval (seconds)</label>
+        <input
+          type="number"
+          value={interval}
+          min={5}
+          onChange={(e) => setInterval_(parseInt(e.target.value, 10) || 30)}
+          className={input + " max-w-[10rem]"}
+        />
       </div>
 
       <div className="flex items-center gap-3">
@@ -206,10 +174,7 @@ function ConfigEditor({
           {busy ? "Saving…" : "Save"}
         </button>
         <p className="text-xs text-[var(--text-muted)]">
-          Shared token:{" "}
-          <span className={config.token_set ? "text-green-500" : "text-amber-500"}>
-            {config.token_set ? "set" : "not set — pair with a standby below"}
-          </span>
+          Token: <span className={config.token_set ? "text-green-500" : "text-amber-500"}>{config.token_set ? "set" : "not set"}</span>
         </p>
       </div>
       {msg && <p className="text-xs mt-2 text-[var(--text-muted)]">{msg}</p>}
@@ -220,7 +185,6 @@ function ConfigEditor({
 function PairingCard({ config, onChanged }: { config: HAConfig; onChanged: () => void }) {
   const me = config.self_id.toLowerCase() === "a" ? config.node_a : config.node_b;
   const [myBaseUrl, setMyBaseUrl] = useState(me.base_url || window.location.origin);
-  const [mySftpHost, setMySftpHost] = useState(me.sftp_host || `${window.location.hostname}:2222`);
   const [secret, setSecret] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -233,7 +197,7 @@ function PairingCard({ config, onChanged }: { config: HAConfig; onChanged: () =>
     setBusy(true);
     setErr("");
     try {
-      const r = await generatePairing(myBaseUrl, mySftpHost);
+      const r = await generatePairing(myBaseUrl);
       setSecret(r.pairing_secret);
       onChanged();
     } catch (e) {
@@ -253,9 +217,8 @@ function PairingCard({ config, onChanged }: { config: HAConfig; onChanged: () =>
     <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 mb-6">
       <h2 className="text-sm font-bold text-[var(--text-heading)] mb-2">Pair a standby</h2>
       <p className="text-xs text-[var(--text-muted)] mb-4">
-        Confirm how this node should be reached, then generate a secret. Paste the secret into
-        the new standby's setup screen — pairing exchanges SSH keys, the HA token, and the
-        settings-encryption key, all in one round-trip.
+        Confirm how this node should be reached, then generate a secret and paste it into the
+        new standby's setup screen.
       </p>
 
       <label className="block text-xs text-[var(--text-muted)] mb-1">This node's base URL</label>
@@ -263,19 +226,12 @@ function PairingCard({ config, onChanged }: { config: HAConfig; onChanged: () =>
         type="text"
         value={myBaseUrl}
         onChange={(e) => setMyBaseUrl(e.target.value)}
-        className={input + " mb-2"}
-      />
-      <label className="block text-xs text-[var(--text-muted)] mb-1">This node's SFTP host:port</label>
-      <input
-        type="text"
-        value={mySftpHost}
-        onChange={(e) => setMySftpHost(e.target.value)}
         className={input + " mb-3"}
       />
 
       <button
         onClick={generate}
-        disabled={busy || !myBaseUrl || !mySftpHost}
+        disabled={busy || !myBaseUrl}
         className="text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--btn-text)] rounded px-4 py-1.5 disabled:opacity-50 mb-3"
       >
         {busy ? "Generating…" : secret ? "Regenerate" : "Generate pairing secret"}
@@ -299,6 +255,43 @@ function PairingCard({ config, onChanged }: { config: HAConfig; onChanged: () =>
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function SyncCard({ status, onSynced }: { status: HAStatus; onSynced: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  if (status.role !== "primary") return null;
+
+  const trigger = async () => {
+    setBusy(true);
+    setMsg("");
+    try {
+      const r = await syncNow();
+      setMsg(r.ok ? `Pushed ${r.size_bytes ? formatBytes(r.size_bytes) : "?"} (data_version=${r.data_version ?? "?"})` : `Failed: ${r.reason}`);
+      onSynced();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Sync failed");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 mb-6">
+      <h2 className="text-sm font-bold text-[var(--text-heading)] mb-3">Replication</h2>
+      <button
+        onClick={trigger}
+        disabled={busy}
+        className="text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--btn-text)] rounded px-3 py-1.5 disabled:opacity-50"
+      >
+        {busy ? "Syncing…" : "Push snapshot now"}
+      </button>
+      {msg && <p className="text-xs mt-2 text-[var(--text-muted)]">{msg}</p>}
+      <p className="text-xs text-[var(--text-muted)] mt-3">
+        Snapshots are pushed automatically every {status.sync_interval_seconds ?? 30}s, but only
+        when <code>PRAGMA data_version</code> has changed since the last push.
+      </p>
     </div>
   );
 }
@@ -416,16 +409,14 @@ export default function ClusterPage() {
 
   if (!status) return null;
 
-  // Pairing is the primary action when HA is off OR this is the primary —
-  // the editor is for fixing things later.
   const showPairing = !status.enabled || status.role === "primary";
 
   return (
     <div>
       <h1 className="text-xl font-bold text-[var(--text-heading)] mb-6">Cluster</h1>
-      <PortMappingBanner />
       <StatusCard status={status} />
       {showPairing && config && <PairingCard config={config} onChanged={refresh} />}
+      {status.enabled && <SyncCard status={status} onSynced={refresh} />}
       <BackupsCard />
       <DangerCard role={status.role} onChanged={refresh} />
       {config && (
@@ -439,8 +430,8 @@ export default function ClusterPage() {
           {showAdvanced && (
             <div className="mt-3">
               <p className="text-xs text-[var(--text-muted)] mb-3">
-                These fields are populated by pairing. Edit them only if a host moves or you need
-                to retroactively correct a base URL or SFTP host.
+                Populated by pairing. Edit only if a host moves or you need to retroactively
+                correct a base URL.
               </p>
               <ConfigEditor config={config} onSaved={refresh} />
             </div>
