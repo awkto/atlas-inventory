@@ -392,16 +392,43 @@ def _sync_tick() -> None:
 # ---------------------------------------------------------------------------
 
 def peer_status() -> dict | None:
+    """GET /api/ha/status on the peer. Used for split-brain check on failover.
+
+    Best-effort with a generous timeout — cross-network HTTPS through nginx
+    can spike past 5s on the first hit. If we time out here, callers should
+    fall back to peer_recently_seen() for a more reliable liveness signal.
+    """
     base = peer_base_url()
     if not base:
         return None
     try:
-        r = httpx.get(f"{base.rstrip('/')}/api/ha/status", timeout=5.0, verify=False)
+        r = httpx.get(f"{base.rstrip('/')}/api/ha/status", timeout=15.0, verify=False)
         if r.status_code == 200:
             return r.json()
     except Exception as e:
         logger.debug("peer_status unreachable: %s", e)
     return None
+
+
+def peer_recently_seen() -> bool:
+    """Liveness signal derived from successful sync activity.
+
+    The replication path is the most reliable evidence of "peer is talking to
+    us": on the primary, a recent successful push proves the peer accepted
+    auth and wrote the bytes; on the standby, a recent receive proves the
+    primary is alive. Window: 2× sync_interval (a single missed tick is fine).
+    """
+    meta = _read_meta()
+    role = current_role()
+    last_iso = meta.get("last_pushed_at") if role == "primary" else meta.get("last_received_at")
+    if not last_iso:
+        return False
+    try:
+        last = datetime.fromisoformat(last_iso)
+    except Exception:
+        return False
+    age = (datetime.now(timezone.utc) - last).total_seconds()
+    return age < 2 * sync_interval_seconds()
 
 
 def demote_peer() -> tuple[bool, str]:

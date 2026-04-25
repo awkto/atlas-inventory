@@ -108,6 +108,11 @@ def ha_status():
         pass
 
     peer = ha.peer_status()
+    # Reachability is "either I can GET /status from the peer right now, OR
+    # we exchanged a snapshot within the last 2x sync interval" — the latter
+    # is the more reliable signal because it proves the bidirectional
+    # auth + transport is working, not just that an HTTP probe goes through.
+    recently_synced = ha.peer_recently_seen()
 
     return {
         "enabled": True,
@@ -115,7 +120,7 @@ def ha_status():
         "self_id": ha.self_id(),
         "peer_id": ha.peer_id(),
         "peer_url": ha.peer_base_url(),
-        "peer_reachable": peer is not None,
+        "peer_reachable": peer is not None or recently_synced,
         "peer_role": peer.get("role") if peer else None,
         "last_promoted_at": state.get("last_promoted_at"),
         "last_demoted_at": state.get("last_demoted_at"),
