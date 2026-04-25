@@ -54,6 +54,7 @@ function StatusCard({ status }: { status: HAStatus }) {
   const lastSync = isPrimary ? meta.last_pushed_at : meta.last_received_at;
   const lastSize = isPrimary ? meta.last_pushed_size_bytes : meta.last_received_size_bytes;
   const lastVersion = isPrimary ? meta.last_pushed_data_version : meta.last_received_data_version;
+  const lastSeen = meta.last_seen_peer_at;
 
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 mb-6">
@@ -70,14 +71,20 @@ function StatusCard({ status }: { status: HAStatus }) {
         <Row label="Self ID" value={status.self_id ?? "—"} />
         <Row
           label="Peer"
-          value={`${status.peer_url || "(unset)"} — ${
-            status.peer_reachable ? status.peer_role ?? "unknown" : "unreachable"
-          }`}
+          value={
+            <>
+              <span>{status.peer_url || "(unset)"}</span>{" "}
+              <span className={status.peer_reachable ? "text-green-500" : "text-red-500"}>
+                — {status.peer_reachable ? "reachable" : "unreachable"}
+              </span>
+            </>
+          }
         />
         <Row label="Sync interval" value={`${status.sync_interval_seconds ?? "—"} s`} />
+        <Row label="Last contact" value={lastSeen ?? "never"} />
         <Row
-          label={isPrimary ? "Last pushed" : "Last received"}
-          value={lastSync ? `${lastSync} · ${lastSize ? formatBytes(lastSize) : "?"} · v${lastVersion ?? "?"}` : "never"}
+          label={isPrimary ? "Last data push" : "Last data receive"}
+          value={lastSync ? `${lastSync} · ${lastSize ? formatBytes(lastSize) : "?"} · v${lastVersion ?? "?"}` : "never (no writes since pairing)"}
         />
         <Row label="Last promoted" value={status.last_promoted_at ?? "never"} />
         <Row label="Last demoted" value={status.last_demoted_at ?? "never"} />

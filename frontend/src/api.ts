@@ -160,6 +160,7 @@ export interface HAStatus {
     last_received_at?: string;
     last_received_data_version?: string;
     last_received_size_bytes?: number;
+    last_seen_peer_at?: string;
     sender_id?: string;
   };
   last_backup?: { name: string; size_bytes: number; mtime: string } | null;
