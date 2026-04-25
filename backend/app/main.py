@@ -7,9 +7,11 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.auth import is_first_run, validate_bearer
-from app.config import NOAUTH
+from app.config import HA_ENABLED, HA_PEER_URL, NOAUTH
 from app.database import Base, engine, SessionLocal
+from app import backup, ha
 from app.routers import auth, export, items, mcp, networks, search
+from app.routers import ha as ha_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -192,12 +194,33 @@ OPEN_PATHS = {
     "/mcpdocs",
 }
 
+# HA endpoints enforce their own auth (see routers/ha.py): /status is open,
+# /demote uses HA_TOKEN, /failover + /backup(s) accept session OR HA_TOKEN.
+HA_PREFIX = "/api/ha/"
+
 MCP_PREFIXES = ("/mcp/",)
 
 
 @app.middleware("http")
-async def auth_middleware(request: Request, call_next):
+async def gateway_middleware(request: Request, call_next):
     path = request.url.path
+
+    # HA middleware: if this node is a standby, block everything except HA
+    # endpoints and health.
+    if HA_ENABLED and ha.current_role() == "standby":
+        if path == "/api/health" or path.startswith(HA_PREFIX) or not path.startswith("/api/"):
+            return await call_next(request)
+        return JSONResponse(
+            {
+                "detail": "This node is in standby. Direct writes to the primary.",
+                "primary_url": HA_PEER_URL,
+            },
+            status_code=503,
+        )
+
+    # HA endpoints do their own auth.
+    if path.startswith(HA_PREFIX):
+        return await call_next(request)
 
     # Always allow open paths and MCP paths (MCP handles its own auth)
     if path in OPEN_PATHS or any(path.startswith(p) for p in MCP_PREFIXES) or not path.startswith("/api/"):
@@ -224,6 +247,16 @@ async def auth_middleware(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
+# Lifecycle — start replication + backup scheduler
+# ---------------------------------------------------------------------------
+
+@app.on_event("startup")
+def _startup():
+    ha.on_startup()
+    backup.start_scheduler()
+
+
+# ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
 
@@ -233,6 +266,7 @@ app.include_router(networks.router)
 app.include_router(export.router)
 app.include_router(search.router)
 app.include_router(mcp.router)
+app.include_router(ha_router.router)
 
 
 @app.get("/api/health")

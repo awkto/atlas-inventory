@@ -5,6 +5,18 @@ services:
       - DATABASE_URL=sqlite:////data/atlas.db
       - NOAUTH=${NOAUTH:-}
       - MCP_ENABLED=${MCP_ENABLED:-true}
+      # --- HA (optional) ---
+      # See docker-compose.ha.yml.example for a two-host setup.
+      - HA_ENABLED=${HA_ENABLED:-}
+      - HA_SELF_ID=${HA_SELF_ID:-A}
+      - HA_INITIAL_ROLE=${HA_INITIAL_ROLE:-primary}
+      - HA_REPLICA_URL_SELF=${HA_REPLICA_URL_SELF:-}
+      - HA_REPLICA_URL_PEER=${HA_REPLICA_URL_PEER:-}
+      - HA_PEER_URL=${HA_PEER_URL:-}
+      - HA_TOKEN=${HA_TOKEN:-}
+      # --- Backups ---
+      - BACKUP_INTERVAL_SECONDS=${BACKUP_INTERVAL_SECONDS:-900}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
     volumes:
       - atlas-data:/data
     ports:

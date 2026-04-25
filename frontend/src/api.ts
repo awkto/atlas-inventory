@@ -137,3 +137,51 @@ export const getApiToken = () => request<{ api_token: string | null; noauth?: bo
 
 export const regenerateApiToken = () =>
   request<{ success: boolean; api_token: string }>("/api/auth/token/regenerate", { method: "POST" });
+
+// ---------------------------------------------------------------------------
+// HA
+// ---------------------------------------------------------------------------
+
+export interface HAStatus {
+  enabled: boolean;
+  role: "primary" | "standby";
+  self_id?: string;
+  peer_url?: string;
+  peer_reachable?: boolean;
+  peer_role?: "primary" | "standby" | null;
+  last_promoted_at?: string | null;
+  last_demoted_at?: string | null;
+  litestream_pid?: number | null;
+  litestream_available?: boolean;
+  last_backup?: { name: string; size_bytes: number; mtime: string } | null;
+  data_version?: number | null;
+}
+
+export const getHAStatus = async (): Promise<HAStatus> => {
+  // Open endpoint — works even from a standby without a session.
+  const res = await fetch("/api/ha/status");
+  return res.json();
+};
+
+export const triggerFailover = async (force: boolean, haToken?: string) => {
+  // Use the HA token if provided (standby without session), else session bearer.
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  headers["Authorization"] = `Bearer ${haToken ?? localStorage.getItem(TOKEN_KEY) ?? ""}`;
+  const res = await fetch("/api/ha/failover", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ force }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail?.error || body.detail || res.statusText);
+  return body;
+};
+
+export const triggerBackup = () =>
+  request<{ ok: boolean; skipped: boolean; reason?: string; path?: string; size_bytes?: number }>(
+    "/api/ha/backup",
+    { method: "POST" },
+  );
+
+export const listBackups = () =>
+  request<Array<{ name: string; size_bytes: number; mtime: string }>>("/api/ha/backups");
