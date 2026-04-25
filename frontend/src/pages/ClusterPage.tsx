@@ -26,13 +26,40 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+function PortMappingBanner() {
+  return (
+    <div className="bg-[var(--bg-card)] border border-amber-500/40 rounded-lg p-4 mb-6 text-xs text-[var(--text-heading)]">
+      <p className="font-bold mb-1">Before pairing — map the SFTP port</p>
+      <p className="text-[var(--text-muted)] leading-relaxed">
+        HA replication uses an embedded SFTP server on the container's port 22. Make sure your
+        compose file maps it to a host port (default <code className="font-mono">2222:22</code>) on
+        both nodes, and that the peer can reach <code className="font-mono">{`<this-host>:2222`}</code>.
+        Watchtower won't add new port mappings on its own — you have to{" "}
+        <code className="font-mono">docker compose down &amp;&amp; up -d</code> after editing.
+      </p>
+    </div>
+  );
+}
+
 function StatusCard({ status }: { status: HAStatus }) {
   if (!status.enabled) {
     return (
       <div className="bg-[var(--bg-card)] border border-[var(--border-card)] rounded-lg p-6 mb-6">
-        <p className="text-sm text-[var(--text-muted)]">
-          HA is disabled. Configure and enable it below, or accept a pairing secret from an existing cluster.
+        <h2 className="text-sm font-bold text-[var(--text-heading)] mb-2">HA is disabled</h2>
+        <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+          Two ways to turn it on:
         </p>
+        <ul className="text-xs text-[var(--text-muted)] list-disc ml-5 mt-2 space-y-1">
+          <li>
+            This node is the <strong>primary</strong> — scroll down to <em>Pair a standby</em>,
+            generate a secret, and paste it into the standby's setup screen.
+          </li>
+          <li>
+            This node is the <strong>standby</strong> — that's done from this node's first-run
+            setup screen by selecting "Join existing cluster". Already past that point? Sign out
+            and the standby flow appears next time.
+          </li>
+        </ul>
       </div>
     );
   }
@@ -371,6 +398,7 @@ function DangerCard({ role, onChanged }: { role: string | undefined; onChanged: 
 export default function ClusterPage() {
   const [status, setStatus] = useState<HAStatus | null>(null);
   const [config, setConfig] = useState<HAConfig | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const refresh = async () => {
     try {
@@ -388,14 +416,37 @@ export default function ClusterPage() {
 
   if (!status) return null;
 
+  // Pairing is the primary action when HA is off OR this is the primary —
+  // the editor is for fixing things later.
+  const showPairing = !status.enabled || status.role === "primary";
+
   return (
     <div>
       <h1 className="text-xl font-bold text-[var(--text-heading)] mb-6">Cluster</h1>
+      <PortMappingBanner />
       <StatusCard status={status} />
-      {config && <ConfigEditor config={config} onSaved={refresh} />}
-      {status.role === "primary" && config && <PairingCard config={config} onChanged={refresh} />}
+      {showPairing && config && <PairingCard config={config} onChanged={refresh} />}
       <BackupsCard />
       <DangerCard role={status.role} onChanged={refresh} />
+      {config && (
+        <div className="mb-6">
+          <button
+            onClick={() => setShowAdvanced((s) => !s)}
+            className="text-xs text-[var(--text-muted)] hover:text-[var(--text-heading)] underline"
+          >
+            {showAdvanced ? "Hide advanced configuration" : "Show advanced configuration"}
+          </button>
+          {showAdvanced && (
+            <div className="mt-3">
+              <p className="text-xs text-[var(--text-muted)] mb-3">
+                These fields are populated by pairing. Edit them only if a host moves or you need
+                to retroactively correct a base URL or SFTP host.
+              </p>
+              <ConfigEditor config={config} onSaved={refresh} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
